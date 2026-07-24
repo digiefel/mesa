@@ -1,0 +1,10 @@
+[package]
+name = "semi-illustrations"
+version = "0.1.0"
+compiler = "0.14.0"
+entrypoint = "src/lib.typ"
+description = "Semiconductor device and fabrication-process illustrations with CeTZ"
+categories = ["visualization"]
+disciplines = ["engineering", "physics"]
+keywords = ["semiconductor", "fabrication", "layer-stack", "cetz"]
+exclude = ["examples", "inspiration"]
