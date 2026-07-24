@@ -8,25 +8,25 @@
 
   layer(
     "substrate",
-    thickness: 1.2,
+    thickness: 30,
     material: "substrate",
-    label: [substrate],
+    label: [Si],
   )
   layer(
     "dielectric",
-    thickness: 0.45,
+    thickness: 5,
     material: "dielectric",
-    label: [dielectric],
+    label: [SiO#sub[2]],
   )
   layer(
     "metal",
-    thickness: 0.25,
+    thickness: 15,
     material: "metal",
-    label: [metal],
+    label: [Al],
   )
   layer(
     "resist",
-    thickness: 0.7,
+    thickness: 20,
     material: "resist",
     label: [resist],
   )

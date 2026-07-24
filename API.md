@@ -79,6 +79,7 @@ layer(
   name,
   thickness: none,
   material: auto,
+  variant: auto,
   label: none,
   ..style,
 )
@@ -87,8 +88,19 @@ layer(
 - `name` identifies the layer and its anchors.
 - `thickness` is required and expressed in model units.
 - `material` selects a style from the active material palette.
+- `variant` selects a 1-based style variant. By default, variants advance and
+  cycle independently for each material.
 - `label` is Typst content associated with the layer.
 - extra named arguments override the selected material style.
+
+```typ
+layer("metal-1", thickness: 0.3, material: "metal")
+layer("metal-2", thickness: 0.3, material: "metal")
+layer("metal-3", thickness: 0.3, material: "metal", variant: 1)
+```
+
+The first two layers use successive metal variants. The third explicitly uses
+variant 1. It still advances the metal occurrence counter.
 
 Material fills can be colors or the package's `hatch`, `crosshatch`, and `dots`
 tilings:
@@ -104,12 +116,32 @@ layer(
 )
 ```
 
+A palette entry is either one style or an array of variants:
+
+```typ
+#semi.layer-stack(
+  sample,
+  palette: (
+    metal: (
+      (fill: rgb("#d9b44a")),
+      (fill: hatch(
+        background: rgb("#d7a17c"),
+        color: rgb("#985f3d"),
+      )),
+    ),
+  ),
+)
+```
+
+Automatic selection starts with the first variant, advances for every layer in
+that material family, and wraps at the end of the array.
+
 ### `layer-stack`
 
 ```typ
 layer-stack(
   body,
-  size: (1, 1),
+  size: (80, 50),
   camera: (
     azimuth: 0deg,
     elevation: 0deg,
@@ -121,7 +153,7 @@ layer-stack(
   ),
   palette: (:),
   rotate-labels: true,
-  length: 1cm,
+  length: .8mm,
   baseline: none,
   background: none,
   stroke: none,
@@ -130,8 +162,8 @@ layer-stack(
 )
 ```
 
-`size` is optional and is `(x-width, y-depth)` in the same model units as layer
-thickness. The default is a square sample of size `(1, 1)`.
+Model coordinates represent nanometres by default. `size` is `(x-width,
+y-depth)` in the same units as layer thickness; its default is `(80, 50)`.
 
 The default camera is the front cross-section. `azimuth` rotates around the
 vertical axis; `elevation` moves above the substrate plane. Changing either
@@ -145,8 +177,9 @@ per-layer style arguments still take precedence.
 to keep labels horizontal on the page.
 
 `length`, `baseline`, `background`, `stroke`, `padding`, and `debug` are passed
-to `cetz.canvas` with the same defaults and meaning. `length` specifies the
-Typst length of one model unit.
+to `cetz.canvas`. `length` specifies the rendered length of one model unit and
+defaults to `.8mm`. The default front view is 64 mm wide; an oblique view is
+approximately half-column width on an A4 page.
 
 The canvas `x`, `y`, and `z` arguments are not exposed. `layer-stack` controls
 the coordinate basis to implement device coordinates and the camera.

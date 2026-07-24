@@ -48,14 +48,37 @@
   0.58 + 0.42 * diffuse
 }
 
-#let _material-style(material, local-style, palette) = {
+#let _faded-stroke(value, fade-bottom) = {
+  let base = stroke(value)
+  let paint = if base.paint == auto { black } else { base.paint }
+  assert(
+    type(paint) == color,
+    message: "a face with fade-bottom must use a solid-color stroke",
+  )
+
+  stroke(
+    paint: gradient.linear(
+      (paint, 35%),
+      (fade-bottom, 100%),
+      angle: 90deg,
+      relative: "self",
+    ),
+    thickness: base.thickness,
+    cap: base.cap,
+    join: base.join,
+    dash: base.dash,
+    miter-limit: base.miter-limit,
+  )
+}
+
+#let _material-style(material, variant, occurrence, local-style, palette) = {
   assert.eq(
     local-style.pos(),
     (),
     message: "layer accepts only named style overrides",
   )
 
-  let style = if material == auto {
+  let family = if material == auto {
     palette.default
   } else {
     if material not in palette {
@@ -64,15 +87,44 @@
     palette.at(material)
   }
 
+  let variants = if type(family) == array {
+    family
+  } else {
+    (family,)
+  }
+  assert(variants.len() > 0, message: "material style family cannot be empty")
+
+  let index = if variant == auto {
+    calc.rem(occurrence, variants.len())
+  } else {
+    assert(
+      type(variant) == int and variant >= 1 and variant <= variants.len(),
+      message: "variant must be between 1 and "
+        + str(variants.len())
+        + " for material "
+        + repr(material),
+    )
+    variant - 1
+  }
+  let style = variants.at(index)
+
   if type(style) == color {
     style = (fill: style)
   }
+  assert(
+    type(style) == dictionary,
+    message: "material variants must be colors or style dictionaries",
+  )
 
   _merge-dictionaries(style, local-style.named())
 }
 
 #let _face(points, normal, style, shading, light) = {
   let face-style = style
+  let fade-bottom = face-style.at("fade-bottom", default: none)
+  if "fade-bottom" in face-style {
+    face-style.remove("fade-bottom")
+  }
   let fill = face-style.at("fill", default: none)
   let brightness = _face-brightness(normal, shading, light)
 
@@ -94,16 +146,46 @@
       stroke: none,
     )
   }
+
+  if fade-bottom != none and normal.at(2) == 0 {
+    assert(
+      type(fade-bottom) == color,
+      message: "fade-bottom must be a color or none",
+    )
+    cetz.draw.line(
+      ..points,
+      close: true,
+      fill: gradient.linear(
+        (fade-bottom.transparentize(100%), 35%),
+        (fade-bottom, 100%),
+        angle: 90deg,
+        relative: "self",
+      ),
+      stroke: _faded-stroke(
+        face-style.at("stroke", default: 1pt + black),
+        fade-bottom,
+      ),
+    )
+  }
 }
 
 #let layer(
   name,
   thickness: none,
   material: auto,
+  variant: auto,
   label: none,
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
+  assert(
+    material == auto or type(material) == str,
+    message: "material must be a string or auto",
+  )
+  assert(
+    variant == auto or type(variant) == int,
+    message: "variant must be an integer or auto",
+  )
   assert(
     type(thickness) in (int, float),
     message: "layer thickness must be a number",
@@ -121,8 +203,12 @@
     let bottom = state.height
     let top = bottom + thickness
     let middle = (bottom + top) / 2
+    let family-name = if material == auto { "default" } else { material }
+    let occurrence = state.material-counts.at(family-name, default: 0)
     let resolved-style = _material-style(
       material,
+      variant,
+      occurrence,
       style,
       state.palette,
     )
@@ -219,6 +305,10 @@
 
     cetz.draw.set-ctx(ctx => {
       ctx.shared-state.semi.height = top
+      ctx.shared-state.semi.material-counts.insert(
+        family-name,
+        occurrence + 1,
+      )
       if label != none {
         ctx.shared-state.semi.labels.push((
           name: name,
@@ -232,7 +322,7 @@
 
 #let layer-stack(
   body,
-  size: (1, 1),
+  size: (80, 50),
   camera: (
     azimuth: 0deg,
     elevation: 0deg,
@@ -244,7 +334,7 @@
   ),
   palette: (:),
   rotate-labels: true,
-  length: 1cm,
+  length: .8mm,
   baseline: none,
   background: none,
   stroke: none,
@@ -279,6 +369,7 @@
           size: size,
           height: 0,
           labels: (),
+          material-counts: (:),
           palette: active-palette,
           shading: shading,
           light: light,
