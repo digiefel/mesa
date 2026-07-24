@@ -1,14 +1,15 @@
 #import "../src/lib.typ" as semi
+#import "@preview/cetz:0.5.2": draw
 
 #set page(width: auto, height: auto, margin: 12mm)
-#set text(size: 7pt)
+#set text(size: 9pt)
 
 #let sample = {
   import semi: *
 
   layer(
     "substrate",
-    thickness: 30,
+    thickness: 20,
     material: "substrate",
     label: [Si],
   )
@@ -28,8 +29,29 @@
     "resist",
     thickness: 20,
     material: "resist",
-    label: [resist],
+    label: [Photoresist],
   )
+
+  draw.on-layer(1, {
+    let bottom = "metal.front-right-bottom"
+    let top = "metal.front-right-top"
+
+    draw.line(
+      (rel: (2, 0, 0), to: bottom),
+      (rel: (2, 0, 0), to: top),
+      name: "metal-thickness",
+      mark: (start: "|", end: "|"),
+      stroke: .55pt,
+    )
+    draw.content(
+      "metal-thickness.mid",
+      box(
+        inset: (x: 2pt, y: .5pt),
+        text(size: 8pt)[15 nm],
+      ),
+      anchor: "west",
+    )
+  })
 }
 
 #grid(
@@ -40,8 +62,6 @@
     #align(center)[
       #semi.layer-stack(
         sample,
-        size: (6, 4),
-        length: 6mm,
       )
     ]
   ],
@@ -49,7 +69,6 @@
     #align(center)[
       #semi.layer-stack(
         sample,
-        size: (6, 4),
         camera: (
           azimuth: 35deg,
           elevation: 25deg,
@@ -59,7 +78,6 @@
           elevation: 60deg,
         ),
         shading: "flat",
-        length: 6mm,
       )
     ]
   ],

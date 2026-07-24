@@ -116,6 +116,12 @@ layer(
 )
 ```
 
+`fade-bottom` fades a material between two depths measured from its top:
+
+```typ
+fade-bottom: (start: 70%, end: 95%, color: white)
+```
+
 A palette entry is either one style or an array of variants:
 
 ```typ

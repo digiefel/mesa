@@ -15,14 +15,13 @@
   ),
   substrate: (
     (
-      fill: dots(
-        background: rgb("#b9cbd0"),
-        color: rgb("#718a91"),
-        spacing: 7pt,
-        radius: .55pt,
-      ),
+      fill: rgb("#b9cbd0"),
       stroke: .55pt + edge,
-      fade-bottom: white,
+      fade-bottom: (
+        start: 70%,
+        end: 95%,
+        color: white,
+      ),
     ),
   ),
   dielectric: (
@@ -88,20 +87,20 @@
   ),
   resist: (
     (
-      fill: crosshatch(
+      fill: dots(
         background: rgb("#c9dfa2"),
         color: rgb("#7fa254"),
         spacing: 8pt,
-        thickness: .35pt,
+        radius: .6pt,
       ),
       stroke: .55pt + edge,
     ),
     (
-      fill: crosshatch(
+      fill: dots(
         background: rgb("#e9b8c5"),
         color: rgb("#b66d82"),
         spacing: 9pt,
-        thickness: .35pt,
+        radius: .6pt,
       ),
       stroke: .55pt + edge,
     ),
