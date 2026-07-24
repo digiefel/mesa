@@ -10,9 +10,7 @@ Supports:
 - a thickness, material, and optional label for each layer;
 - 2D cross-section and 3D oblique rendering from the same stack;
 - package defaults with per-layer style overrides.
-
-Patterned layers, fabrication operations, layout import, and general-purpose
-annotations are outside this slice.
+- different styles of shading and lighting effects
 
 ## Proposed API
 
@@ -42,19 +40,12 @@ annotations are outside this slice.
   )
 }
 
-#semi.layer-stack(size: (6, 4), sample)
-
-#semi.layer-stack(
-  size: (6, 4),
-  {
-    semi.cetz.draw.ortho(sample)
-  },
-)
+#semi.layer-stack(sample)
+// TODO: still not there for the arguments
 ```
 
 `layer-stack` owns the CeTZ canvas. The functions in its body add layers to the
-stack in order. The same body can be drawn directly or wrapped in a CeTZ
-projection.
+stack in order. 
 
 ## Model
 
@@ -86,7 +77,7 @@ layer-stack(
 )
 ```
 
-`size` is required and is `(width, depth)` in the same model units as layer
+`size` is optional and is `(width, depth)` in the same model units as layer
 thickness. `layer-stack` initializes the material styles and stack state, then
 passes its remaining arguments to `cetz.canvas`.
 
@@ -99,4 +90,4 @@ The package uses CeTZ coordinates:
 - `z`: depth.
 
 The plain stack shows the `x-y` plane as a 2D cross-section. 
-The `z` dimension is "up", i.e. normal to the substrate surface.
+The `z` direction is normal to the substrate plane, i.e. "up".
