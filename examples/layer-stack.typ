@@ -2,7 +2,7 @@
 #import "@preview/cetz:0.5.2": draw
 
 #set page(width: auto, height: auto, margin: 12mm)
-#set text(size: 9pt)
+#set text(size: 9pt, font: "Helvetica")
 
 #let sample = {
   import semi: *
@@ -32,26 +32,16 @@
     label: [Photoresist],
   )
 
-  draw.on-layer(1, {
-    let bottom = "metal.front-right-bottom"
-    let top = "metal.front-right-top"
-
-    draw.line(
-      (rel: (2, 0, 0), to: bottom),
-      (rel: (2, 0, 0), to: top),
-      name: "metal-thickness",
-      mark: (start: "|", end: "|"),
-      stroke: .55pt,
-    )
-    draw.content(
-      "metal-thickness.mid",
-      box(
-        inset: (x: 2pt, y: .5pt),
-        text(size: 8pt)[15 nm],
-      ),
-      anchor: "west",
-    )
-  })
+  // an annotation
+  draw.set-style(content: (padding: 2pt))
+  draw.line(
+    (rel: (2, 0), to: "metal.front-right-bottom"),
+    (rel: (2, 0), to: "metal.front-right-top"),
+    name: "metal-t",
+    mark: (start: "|", end: "|"),
+    stroke: .55pt,
+  )
+  draw.content("metal-t.mid", text(7pt)[15 nm], anchor: "west")
 }
 
 #grid(
