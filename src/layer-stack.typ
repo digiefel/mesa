@@ -400,6 +400,7 @@
   material: auto,
   variant: auto,
   label: none,
+  label-transform: auto,
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
@@ -410,6 +411,11 @@
   assert(
     variant == auto or type(variant) == int,
     message: "variant must be an integer or auto",
+  )
+  assert(
+    label-transform == auto
+      or label-transform in ("none", "rotate", "project"),
+    message: "label-transform must be auto, \"none\", \"rotate\", or \"project\"",
   )
   assert(
     type(thickness) in (int, float),
@@ -552,6 +558,7 @@
         ctx.shared-state.semi.labels.push((
           name: name,
           body: label,
+          transform: label-transform,
         ))
       }
       ctx
@@ -640,7 +647,12 @@
           }
           for label in ctx.shared-state.semi.labels {
             let position = label.name + "." + label-face
-            let body = if label-transform == "project" {
+            let transform = if label.transform == auto {
+              label-transform
+            } else {
+              label.transform
+            }
+            let body = if transform == "project" {
               _project-label(label.body, camera)
             } else {
               label.body
@@ -649,7 +661,7 @@
               position,
               body,
               anchor: "center",
-              angle: if label-transform == "rotate" {
+              angle: if transform == "rotate" {
                 label.name + "." + label-face + "-right"
               } else {
                 0deg

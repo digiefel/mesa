@@ -81,6 +81,7 @@ layer(
   material: auto,
   variant: auto,
   label: none,
+  label-transform: auto,
   ..style,
 )
 ```
@@ -91,6 +92,8 @@ layer(
 - `variant` selects a 1-based style variant. By default, variants advance and
   cycle independently for each material.
 - `label` is Typst content associated with the layer.
+- `label-transform` overrides the stack's label transformation for this layer.
+  Its default, `auto`, inherits the `layer-stack` setting.
 - extra named arguments override the selected material style.
 
 ```typ

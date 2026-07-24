@@ -59,6 +59,7 @@
     #align(center)[
       #semi.layer-stack(
         sample,
+        label-transform: "project",
         camera: (
           azimuth: 35deg,
           elevation: 25deg,
