@@ -129,6 +129,26 @@
   )
 }
 
+#let _project-label(body, camera) = {
+  let azimuth = camera.at("azimuth", default: 0deg)
+  let elevation = camera.at("elevation", default: 0deg)
+  let horizontal-x = calc.cos(azimuth)
+  let horizontal-y = calc.sin(elevation) * calc.sin(azimuth)
+  let vertical-y = calc.cos(elevation)
+  let shear = calc.atan2(horizontal-x, horizontal-y)
+
+  std.skew(
+    ay: shear,
+    origin: center + horizon,
+    std.scale(
+      x: horizontal-x * 100%,
+      y: vertical-y * 100%,
+      origin: center + horizon,
+      body,
+    ),
+  )
+}
+
 #let _dot-2d(a, b) = (
   a.at(0) * b.at(0)
   + a.at(1) * b.at(1)
@@ -552,7 +572,7 @@
     elevation: 60deg,
   ),
   palette: (:),
-  rotate-labels: true,
+  label-transform: "project",
   length: .8mm,
   baseline: none,
   background: none,
@@ -568,7 +588,10 @@
   assert(type(camera) == dictionary, message: "camera must be a dictionary")
   assert(type(light) == dictionary, message: "light must be a dictionary")
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
-  assert(type(rotate-labels) == bool, message: "rotate-labels must be a boolean")
+  assert(
+    label-transform in ("none", "rotate", "project"),
+    message: "label-transform must be \"none\", \"rotate\", or \"project\"",
+  )
   assert(shading in ("none", "flat"), message: "unknown shading mode")
 
   let active-palette = _merge-dictionaries(default-palette, palette)
@@ -617,11 +640,16 @@
           }
           for label in ctx.shared-state.semi.labels {
             let position = label.name + "." + label-face
+            let body = if label-transform == "project" {
+              _project-label(label.body, camera)
+            } else {
+              label.body
+            }
             cetz.draw.content(
               position,
-              label.body,
+              body,
               anchor: "center",
-              angle: if rotate-labels {
+              angle: if label-transform == "rotate" {
                 label.name + "." + label-face + "-right"
               } else {
                 0deg

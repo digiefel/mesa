@@ -158,7 +158,7 @@ layer-stack(
     elevation: 60deg,
   ),
   palette: (:),
-  rotate-labels: true,
+  label-transform: "project",
   length: .8mm,
   baseline: none,
   background: none,
@@ -179,8 +179,10 @@ angle reveals the depth of the same stack.
 material colors respond to that light. `palette` changes material defaults;
 per-layer style arguments still take precedence.
 
-`rotate-labels` aligns labels with the projected layer face. Set it to `false`
-to keep labels horizontal on the page.
+`label-transform` controls how labels follow the layer face. `"project"`
+applies the face's full orthographic projection, including foreshortening and
+shear. `"rotate"` only aligns the baseline with the face, while `"none"` keeps
+labels horizontal on the page.
 
 `length`, `baseline`, `background`, `stroke`, `padding`, and `debug` are passed
 to `cetz.canvas`. `length` specifies the rendered length of one model unit and
