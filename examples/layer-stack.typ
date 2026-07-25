@@ -29,8 +29,8 @@
     "resist",
     thickness: 20,
     material: "resist",
-    label: [Photoresist],
   )
+  face-content("resist", [Photoresist])
 
   // an annotation
   draw.set-style(content: (padding: 2pt))
@@ -62,7 +62,7 @@
         label-transform: "project",
         camera: (
           azimuth: 35deg,
-          elevation: 25deg,
+          elevation: 35deg,
         ),
         light: (
           azimuth: -45deg,

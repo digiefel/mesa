@@ -105,6 +105,29 @@ layer("metal-3", thickness: 0.3, material: "metal", variant: 1)
 The first two layers use successive metal variants. The third explicitly uses
 variant 1. It still advances the metal occurrence counter.
 
+### `face-content`
+
+```typ
+face-content(
+  target,
+  body,
+  face: auto,
+  transform: "project",
+  anchor: "center",
+)
+```
+
+Places arbitrary Typst content on a layer face. `target` is the layer name.
+`face: auto` selects the visible front or back face; `"front"`, `"back"`,
+`"left"`, and `"right"` select a vertical face explicitly. `transform` accepts
+`"project"`, `"rotate"`, or `"none"`.
+
+```typ
+face-content("resist", [Photoresist])
+```
+
+Layer labels use the same placement and transformation pipeline.
+
 Material fills can be colors or the package's `hatch`, `crosshatch`, and `dots`
 tilings:
 

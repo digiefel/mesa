@@ -129,11 +129,25 @@
   )
 }
 
-#let _project-label(body, camera) = {
+#let _project-face-content(body, camera, face) = {
   let azimuth = camera.at("azimuth", default: 0deg)
   let elevation = camera.at("elevation", default: 0deg)
-  let horizontal-x = calc.cos(azimuth)
-  let horizontal-y = calc.sin(elevation) * calc.sin(azimuth)
+  let (horizontal-x, horizontal-y) = if face in ("front", "back") {
+    (
+      calc.cos(azimuth),
+      calc.sin(elevation) * calc.sin(azimuth),
+    )
+  } else if face == "right" {
+    (
+      calc.sin(azimuth),
+      -calc.sin(elevation) * calc.cos(azimuth),
+    )
+  } else {
+    (
+      -calc.sin(azimuth),
+      calc.sin(elevation) * calc.cos(azimuth),
+    )
+  }
   let vertical-y = calc.cos(elevation)
   let shear = calc.atan2(horizontal-x, horizontal-y)
 
@@ -147,6 +161,18 @@
       body,
     ),
   )
+}
+
+#let _face-direction-anchor(name, face) = {
+  if face == "front" {
+    name + ".front-right"
+  } else if face == "back" {
+    name + ".back-right"
+  } else if face == "right" {
+    name + ".front-right"
+  } else {
+    name + ".back-left"
+  }
 }
 
 #let _dot-2d(a, b) = (
@@ -555,14 +581,51 @@
         occurrence + 1,
       )
       if label != none {
-        ctx.shared-state.semi.labels.push((
-          name: name,
+        ctx.shared-state.semi.face-contents.push((
+          target: name,
           body: label,
+          face: auto,
           transform: label-transform,
+          anchor: "center",
         ))
       }
       ctx
     })
+  })
+}
+
+#let face-content(
+  target,
+  body,
+  face: auto,
+  transform: "project",
+  anchor: "center",
+) = {
+  assert(type(target) == str, message: "face-content target must be a string")
+  assert(
+    face == auto or face in ("front", "back", "left", "right"),
+    message: "face must be auto, \"front\", \"back\", \"left\", or \"right\"",
+  )
+  assert(
+    transform in ("none", "rotate", "project"),
+    message: "transform must be \"none\", \"rotate\", or \"project\"",
+  )
+  assert(type(anchor) == str, message: "anchor must be a string")
+
+  cetz.draw.set-ctx(ctx => {
+    let state = ctx.shared-state.at("semi", default: none)
+    assert(
+      state != none,
+      message: "face-content must be used inside layer-stack",
+    )
+    ctx.shared-state.semi.face-contents.push((
+      target: target,
+      body: body,
+      face: face,
+      transform: transform,
+      anchor: anchor,
+    ))
+    ctx
   })
 }
 
@@ -617,7 +680,7 @@
         ctx.shared-state.semi = (
           size: size,
           height: 0,
-          labels: (),
+          face-contents: (),
           material-counts: (:),
           palette: active-palette,
           shading: shading,
@@ -645,24 +708,29 @@
           } else {
             "front"
           }
-          for label in ctx.shared-state.semi.labels {
-            let position = label.name + "." + label-face
-            let transform = if label.transform == auto {
+          for item in ctx.shared-state.semi.face-contents {
+            let face = if item.face == auto {
+              label-face
+            } else {
+              item.face
+            }
+            let position = item.target + "." + face
+            let transform = if item.transform == auto {
               label-transform
             } else {
-              label.transform
+              item.transform
             }
             let body = if transform == "project" {
-              _project-label(label.body, camera)
+              _project-face-content(item.body, camera, face)
             } else {
-              label.body
+              item.body
             }
             cetz.draw.content(
               position,
               body,
-              anchor: "center",
+              anchor: item.anchor,
               angle: if transform == "rotate" {
-                label.name + "." + label-face + "-right"
+                _face-direction-anchor(item.target, face)
               } else {
                 0deg
               },
