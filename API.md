@@ -82,6 +82,7 @@ layer(
   variant: auto,
   label: none,
   label-transform: auto,
+  label-position: (center, horizon),
   ..style,
 )
 ```
@@ -94,6 +95,7 @@ layer(
 - `label` is Typst content associated with the layer.
 - `label-transform` overrides the stack's label transformation for this layer.
   Its default, `auto`, inherits the `layer-stack` setting.
+- `label-position` places the label in the face-local `(x, z)` plane.
 - extra named arguments override the selected material style.
 
 ```typ
@@ -114,19 +116,38 @@ face-content(
   face: auto,
   transform: "project",
   anchor: "center",
+  position: (center, horizon),
 )
 ```
 
 Places arbitrary Typst content on a layer face. `target` is the layer name.
 `face: auto` selects the visible front or back face; `"front"`, `"back"`,
 `"left"`, and `"right"` select a vertical face explicitly. `transform` accepts
-`"project"`, `"rotate"`, or `"none"`.
+`"project"`, `"rotate"`, or `"none"`. `position` uses face-local horizontal and
+vertical coordinates.
 
 ```typ
-face-content("resist", [Photoresist])
+face-content(
+  "resist",
+  [Photoresist],
+  position: (center, horizon),
+)
 ```
 
 Layer labels use the same placement and transformation pipeline.
+
+Position components can be alignments, numbers in model units, lengths, ratios,
+or relative lengths:
+
+```typ
+label-position: (center, horizon)
+label-position: (50%, 60%)
+label-position: (100% - 2pt, 50% + 1mm)
+```
+
+`horizon` is the visual vertical middle. For a material with `fade-bottom`, it
+is shifted toward the fully visible part of the layer. An explicit `50%`
+always denotes the geometric midpoint.
 
 Material fills can be colors or the package's `hatch`, `crosshatch`, and `dots`
 tilings:

@@ -30,7 +30,11 @@
     thickness: 20,
     material: "resist",
   )
-  face-content("resist", [Photoresist])
+  face-content(
+    "resist",
+    [Photoresist],
+    position: (center, horizon),
+  )
 
   // an annotation
   draw.set-style(content: (padding: 2pt))

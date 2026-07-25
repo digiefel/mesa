@@ -129,10 +129,10 @@
   )
 }
 
-#let _project-face-content(body, camera, face) = {
+#let _face-horizontal(camera, face) = {
   let azimuth = camera.at("azimuth", default: 0deg)
   let elevation = camera.at("elevation", default: 0deg)
-  let (horizontal-x, horizontal-y) = if face in ("front", "back") {
+  if face in ("front", "back") {
     (
       calc.cos(azimuth),
       calc.sin(elevation) * calc.sin(azimuth),
@@ -148,6 +148,11 @@
       calc.sin(elevation) * calc.cos(azimuth),
     )
   }
+}
+
+#let _project-face-content(body, camera, face) = {
+  let elevation = camera.at("elevation", default: 0deg)
+  let (horizontal-x, horizontal-y) = _face-horizontal(camera, face)
   let vertical-y = calc.cos(elevation)
   let shear = calc.atan2(horizontal-x, horizontal-y)
 
@@ -163,16 +168,117 @@
   )
 }
 
-#let _face-direction-anchor(name, face) = {
-  if face == "front" {
-    name + ".front-right"
-  } else if face == "back" {
-    name + ".back-right"
-  } else if face == "right" {
-    name + ".front-right"
-  } else {
-    name + ".back-left"
+#let _face-content-angle(camera, face) = {
+  let (horizontal-x, horizontal-y) = _face-horizontal(camera, face)
+  calc.atan2(horizontal-x, horizontal-y)
+}
+
+#let _position-component-valid(value) = {
+  type(value) in (
+    int,
+    float,
+    length,
+    ratio,
+    type(50% + 1pt),
+    type(center),
+  )
+}
+
+#let _validate-position(value, name: "position") = {
+  assert(
+    type(value) == array
+      and value.len() == 2
+      and value.all(_position-component-valid),
+    message: name + " must be an (x, z) pair",
+  )
+}
+
+#let _automatic-label-z(style) = {
+  let fade = style.at("fade-bottom", default: none)
+  if fade == none {
+    return 50%
   }
+
+  let config = _fade-config(fade)
+  let start = config.start / 100%
+  let span = (config.end - config.start) / 100%
+  let mass = start + span / 2
+  let moment = start * start / 2 + span * (
+    start / 2 + span * 3 / 20
+  )
+  (1 - moment / mass) * 100%
+}
+
+#let _resolve-position-component(value, extent, visual-middle, ctx, axis) = {
+  let kind = type(value)
+  if kind in (int, float) {
+    float(value)
+  } else if kind == ratio {
+    extent * (value / 100%)
+  } else if kind == length {
+    float(value.to-absolute() / ctx.length)
+  } else if kind == type(50% + 1pt) {
+    (
+      extent * (value.ratio / 100%)
+        + float(value.length.to-absolute() / ctx.length)
+    )
+  } else {
+    assert(
+      value.axis() == if axis == "x" { "horizontal" } else { "vertical" },
+      message: "invalid " + axis + " alignment in position",
+    )
+    let amount = if axis == "x" {
+      if value in (left, start) {
+        0
+      } else if value == center {
+        .5
+      } else {
+        1
+      }
+    } else {
+      if value == bottom {
+        0
+      } else if value == horizon {
+        visual-middle / 100%
+      } else {
+        1
+      }
+    }
+    extent * amount
+  }
+}
+
+#let _face-position(layer, face, position, ctx, camera) = {
+  let horizontal-extent = if face in ("front", "back") {
+    layer.width
+  } else {
+    layer.depth
+  }
+  let horizontal = _resolve-position-component(
+    position.at(0),
+    horizontal-extent,
+    50%,
+    ctx,
+    "x",
+  )
+  let vertical = _resolve-position-component(
+    position.at(1),
+    layer.top - layer.bottom,
+    layer.visual-middle,
+    ctx,
+    "z",
+  )
+  let point = if face == "front" {
+    (horizontal, 0, layer.bottom + vertical)
+  } else if face == "back" {
+    (horizontal, layer.depth, layer.bottom + vertical)
+  } else if face == "right" {
+    (layer.width, layer.depth - horizontal, layer.bottom + vertical)
+  } else {
+    (0, horizontal, layer.bottom + vertical)
+  }
+  let projected = _project(point, camera)
+  (projected.at(0), -projected.at(1), 0)
 }
 
 #let _dot-2d(a, b) = (
@@ -427,6 +533,7 @@
   variant: auto,
   label: none,
   label-transform: auto,
+  label-position: (center, horizon),
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
@@ -443,6 +550,7 @@
       or label-transform in ("none", "rotate", "project"),
     message: "label-transform must be auto, \"none\", \"rotate\", or \"project\"",
   )
+  _validate-position(label-position, name: "label-position")
   assert(
     type(thickness) in (int, float),
     message: "layer thickness must be a number",
@@ -469,6 +577,7 @@
       style,
       state.palette,
     )
+    let visual-middle = _automatic-label-z(resolved-style)
 
     cetz.draw.group(
       name: name,
@@ -580,6 +689,13 @@
         family-name,
         occurrence + 1,
       )
+      ctx.shared-state.semi.layers.insert(name, (
+        width: width,
+        depth: depth,
+        bottom: bottom,
+        top: top,
+        visual-middle: visual-middle,
+      ))
       if label != none {
         ctx.shared-state.semi.face-contents.push((
           target: name,
@@ -587,6 +703,7 @@
           face: auto,
           transform: label-transform,
           anchor: "center",
+          position: label-position,
         ))
       }
       ctx
@@ -600,6 +717,7 @@
   face: auto,
   transform: "project",
   anchor: "center",
+  position: (center, horizon),
 ) = {
   assert(type(target) == str, message: "face-content target must be a string")
   assert(
@@ -611,6 +729,7 @@
     message: "transform must be \"none\", \"rotate\", or \"project\"",
   )
   assert(type(anchor) == str, message: "anchor must be a string")
+  _validate-position(position)
 
   cetz.draw.set-ctx(ctx => {
     let state = ctx.shared-state.at("semi", default: none)
@@ -624,6 +743,7 @@
       face: face,
       transform: transform,
       anchor: anchor,
+      position: position,
     ))
     ctx
   })
@@ -681,6 +801,7 @@
           size: size,
           height: 0,
           face-contents: (),
+          layers: (:),
           material-counts: (:),
           palette: active-palette,
           shading: shading,
@@ -714,7 +835,21 @@
             } else {
               item.face
             }
-            let position = item.target + "." + face
+            let layer = ctx.shared-state.semi.layers.at(
+              item.target,
+              default: none,
+            )
+            assert(
+              layer != none,
+              message: "unknown face-content target: " + repr(item.target),
+            )
+            let position = _face-position(
+              layer,
+              face,
+              item.position,
+              ctx,
+              camera,
+            )
             let transform = if item.transform == auto {
               label-transform
             } else {
@@ -730,7 +865,7 @@
               body,
               anchor: item.anchor,
               angle: if transform == "rotate" {
-                _face-direction-anchor(item.target, face)
+                _face-content-angle(camera, face)
               } else {
                 0deg
               },
