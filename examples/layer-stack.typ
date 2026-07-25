@@ -12,6 +12,11 @@
     thickness: 20,
     material: "substrate",
     label: [Si],
+    fade-bottom: (
+      start: 50%,
+      end: 99%,
+      color: white,
+    ),
   )
   layer(
     "dielectric",
