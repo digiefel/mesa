@@ -1,6 +1,7 @@
 #import "../src/kernel.typ" as kernel
 #import "../src/projection.typ": device-to-cetz, ortho-view
 #import "../src/scene.typ" as scene
+#import "../src/lib.typ" as semi
 #import "@preview/cetz:0.5.2": canvas, draw
 
 #set page(width: auto, height: auto, margin: 12mm)
@@ -27,6 +28,23 @@
 #let view-y = 35deg
 #let view-z = 0deg
 #let view = ortho-view(view-x, view-y, z: view-z)
+
+#let masked-sample = {
+  import semi: *
+
+  layer(
+    "substrate",
+    thickness: 1.5,
+    material: "substrate",
+    fade-bottom: none,
+  )
+  layer(
+    "pattern",
+    thickness: 1.5,
+    material: "dielectric",
+    mask: result,
+  )
+}
 
 #let sample-scene = (
   (
@@ -99,19 +117,15 @@
 ])
 
 #align(center)[
-  #canvas(length: 5mm, {
-    draw.ortho(
-      x: view-x,
-      y: view-y,
-      z: view-z,
-      sorted: true,
-      cull-face: none,
-      {
-        draw.transform(device-to-cetz)
-        scene.render(sample-scene, view: view)
-      },
-    )
-  })
+  #semi.layer-stack(
+    masked-sample,
+    size: (10, 6),
+    camera: (
+      azimuth: view-y,
+      elevation: view-x,
+    ),
+    length: 5mm,
+  )
 ]
 
 #pagebreak()

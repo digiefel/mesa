@@ -15,12 +15,14 @@
 )
 #import "projection.typ": (
   device-to-cetz as _device-to-cetz,
+  ortho-view as _ortho-view,
   resolve-known-anchor as _resolve-known-anchor,
   project as _project,
   face-horizontal as _face-horizontal,
   project-face-content,
   face-content-angle as _face-content-angle,
 )
+#import "scene.typ" as _scene
 
 #let _merge-dictionaries(base, overrides) = {
   let merged = base
@@ -801,40 +803,52 @@
 
   cetz.draw.get-ctx(ctx => {
     let state = ctx.shared-state.semi
-    cetz.draw.on-layer(-1, {
-      for (index, face) in state.faces.enumerate() {
-        _render-face(
-          face.points,
-          face.normal,
-          face.style,
-          face.shading,
-          face.light,
-          face.camera,
-          state.face-diagnostics.at(index).visibility,
-        )
-      }
-    })
+    if state.masked {
+      _scene.render(
+        state.volumes,
+        view: _ortho-view(
+          state.camera.at("elevation", default: 0deg),
+          state.camera.at("azimuth", default: 0deg),
+        ),
+      )
+    } else {
+      cetz.draw.on-layer(-1, {
+        for (index, face) in state.faces.enumerate() {
+          _render-face(
+            face.points,
+            face.normal,
+            face.style,
+            face.shading,
+            face.light,
+            face.camera,
+            state.face-diagnostics.at(index).visibility,
+          )
+        }
+      })
+    }
   })
 }
 
 #let _draw-outlines() = {
   cetz.draw.get-ctx(ctx => {
     let state = ctx.shared-state.semi
-    cetz.draw.on-layer(-0.5, {
-      for (index, outline) in state.outlines.enumerate() {
-        _draw-beveled-outline(
-          outline.width,
-          outline.depth,
-          outline.bottom,
-          outline.top,
-          outline.top-bevel,
-          outline.bottom-bevel,
-          outline.style,
-          outline.camera,
-          index == state.outlines.len() - 1,
-        )
-      }
-    })
+    if not state.masked {
+      cetz.draw.on-layer(-0.5, {
+        for (index, outline) in state.outlines.enumerate() {
+          _draw-beveled-outline(
+            outline.width,
+            outline.depth,
+            outline.bottom,
+            outline.top,
+            outline.top-bevel,
+            outline.bottom-bevel,
+            outline.style,
+            outline.camera,
+            index == state.outlines.len() - 1,
+          )
+        }
+      })
+    }
   })
 }
 
@@ -848,6 +862,7 @@
   label-position: (center, horizon),
   bevel: auto,
   internal-stroke: auto,
+  mask: auto,
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
@@ -858,6 +873,10 @@
   assert(
     variant == auto or type(variant) == int,
     message: "variant must be an integer or auto",
+  )
+  assert(
+    mask == auto or type(mask) == array,
+    message: "layer mask must be polygon geometry or auto",
   )
   assert(
     label-transform == auto
@@ -1151,6 +1170,28 @@
 
     cetz.draw.set-ctx(ctx => {
       ctx.shared-state.semi.height = top
+      let footprint = if mask == auto {
+        (
+          (
+            ((0, 0), (width, 0), (width, depth), (0, depth)),
+          ),
+        )
+      } else {
+        mask
+      }
+      let fill = resolved-style.at("fill", default: none)
+      ctx.shared-state.semi.volumes.push((
+        shapes: footprint,
+        bottom: bottom,
+        top: top,
+        top-fill: fill,
+        side-fill: fill,
+        section-fill: fill,
+      ))
+      ctx.shared-state.semi.masked = (
+        ctx.shared-state.semi.masked
+          or mask != auto
+      )
       ctx.shared-state.semi.material-counts.insert(
         family-name,
         occurrence + 1,
@@ -1242,6 +1283,8 @@
           faces: (),
           face-diagnostics: (),
           outlines: (),
+          volumes: (),
+          masked: false,
           face-contents: (),
           layers: (:),
           material-counts: (:),
