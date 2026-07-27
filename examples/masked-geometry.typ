@@ -1,5 +1,5 @@
 #import "../src/kernel.typ" as kernel
-#import "../src/projection.typ": device-to-cetz
+#import "../src/projection.typ": device-to-cetz, ortho-view
 #import "../src/scene.typ" as scene
 #import "@preview/cetz:0.5.2": canvas, draw
 
@@ -23,6 +23,10 @@
 
 #let result = kernel.difference(subject, mask)
 #let cut-y = 2
+#let view-x = 35deg
+#let view-y = 35deg
+#let view-z = 0deg
+#let view = ortho-view(view-x, view-y, z: view-z)
 
 #let sample-scene = (
   (
@@ -97,8 +101,9 @@
 #align(center)[
   #canvas(length: 5mm, {
     draw.ortho(
-      x: 35deg,
-      y: 35deg,
+      x: view-x,
+      y: view-y,
+      z: view-z,
       sorted: true,
       cull-face: none,
       {
@@ -112,15 +117,25 @@
 #pagebreak()
 
 #align(center)[
+  #grid(
+    columns: 4,
+    gutter: 5mm,
+    [#line(length: 6mm, stroke: scene.topology-debug-styles.outline) outline],
+    [#line(length: 6mm, stroke: scene.topology-debug-styles.material) material],
+    [#line(length: 6mm, stroke: scene.topology-debug-styles.occluded) occluded],
+    [#line(length: 6mm, stroke: scene.topology-debug-styles.internal) internal],
+  )
+  #v(3mm)
   #canvas(length: 5mm, {
     draw.ortho(
-      x: 35deg,
-      y: 35deg,
+      x: view-x,
+      y: view-y,
+      z: view-z,
       sorted: true,
       cull-face: none,
       {
         draw.transform(device-to-cetz)
-        scene.render-topology-debug(sample-scene)
+        scene.render-topology-debug(sample-scene, view: view)
       },
     )
   })
@@ -139,8 +154,9 @@
 #align(center)[
   #canvas(length: 5mm, {
     draw.ortho(
-      x: 35deg,
-      y: 35deg,
+      x: view-x,
+      y: view-y,
+      z: view-z,
       sorted: true,
       cull-face: none,
       {

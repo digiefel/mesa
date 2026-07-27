@@ -7,6 +7,7 @@ use i_overlay::string::clip::{ClipRule, IntClip};
 use serde::{Deserialize, Serialize};
 
 mod topology;
+mod visibility;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_minimal_protocol::wasm_func;
@@ -59,12 +60,13 @@ struct ClipYRequest {
 struct SceneTopologyRequest {
     version: u8,
     volumes: Vec<topology::WireVolume>,
+    view: visibility::ViewMatrix,
 }
 
 #[derive(Debug, Serialize)]
 struct SceneTopologyResponse {
     version: u8,
-    edges: Vec<topology::WireEdge>,
+    edges: Vec<visibility::WireEdge>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
@@ -155,7 +157,8 @@ pub fn scene_topology(input: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     topology::validate_volumes(&request.volumes)?;
-    let edges = topology::scene_edges(&request.volumes);
+    visibility::validate_view(request.view)?;
+    let edges = visibility::scene_edges(&request.volumes, request.view);
 
     let mut output = Vec::new();
     ciborium::into_writer(

@@ -4,11 +4,11 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay::Overlay;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::i_shape::int::shape::IntShapes;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::{WireShapes, from_int_shapes, to_int_shapes};
 
-type Point3 = [i64; 3];
+pub(crate) type Point3 = [i64; 3];
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct WireVolume {
@@ -18,7 +18,7 @@ pub(crate) struct WireVolume {
     pub(crate) material: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum EdgeKind {
     Boundary,
@@ -27,25 +27,28 @@ pub(crate) enum EdgeKind {
     Smooth,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct WireEdge {
+#[derive(Clone, Debug)]
+pub(crate) struct AtomicEdge {
     pub(crate) start: Point3,
     pub(crate) end: Point3,
     pub(crate) kind: EdgeKind,
-    pub(crate) faces: u32,
+    pub(crate) interior: bool,
+    pub(crate) incident: BTreeSet<usize>,
 }
 
 #[derive(Clone, Debug)]
-struct Face {
-    normal: Point3,
-    material: u32,
-    edges: Vec<Segment>,
+pub(crate) struct Face {
+    pub(crate) normal: Point3,
+    pub(crate) material: u32,
+    interior: bool,
+    pub(crate) contours: Vec<Vec<Point3>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Segment {
     start: Point3,
     end: Point3,
+    interior: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +56,7 @@ struct FaceInterval {
     start: i128,
     end: i128,
     face: usize,
+    interior: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,9 +90,10 @@ pub(crate) fn validate_volumes(volumes: &[WireVolume]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn scene_edges(volumes: &[WireVolume]) -> Vec<WireEdge> {
+pub(crate) fn scene_geometry(volumes: &[WireVolume]) -> (Vec<Face>, Vec<AtomicEdge>) {
     let faces = scene_faces(volumes);
-    atomic_edges(&faces)
+    let edges = atomic_edges(&faces);
+    (faces, edges)
 }
 
 fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
@@ -148,28 +153,22 @@ fn add_horizontal_faces(
     material: u32,
 ) {
     for shape in shapes {
-        let mut edges = Vec::new();
-        for contour in shape {
-            for index in 0..contour.len() {
-                let [x0, y0] = contour[index];
-                let [x1, y1] = contour[(index + 1) % contour.len()];
-                edges.push(Segment {
-                    start: [x0, y0, height],
-                    end: [x1, y1, height],
-                });
-            }
-        }
+        let contours = shape
+            .iter()
+            .map(|contour| contour.iter().map(|[x, y]| [*x, *y, height]).collect())
+            .collect();
         faces.push(Face {
             normal,
             material,
-            edges,
+            interior: false,
+            contours,
         });
     }
 }
 
 fn add_vertical_faces(faces: &mut Vec<Face>, volume: &WireVolume) {
     for shape in &volume.shapes {
-        for contour in shape {
+        for (contour_index, contour) in shape.iter().enumerate() {
             for index in 0..contour.len() {
                 let [x0, y0] = contour[index];
                 let [x1, y1] = contour[(index + 1) % contour.len()];
@@ -180,36 +179,20 @@ fn add_vertical_faces(faces: &mut Vec<Face>, volume: &WireVolume) {
                 faces.push(Face {
                     normal: [y1 - y0, x0 - x1, 0],
                     material: volume.material,
-                    edges: vec![
-                        Segment {
-                            start: bottom_start,
-                            end: bottom_end,
-                        },
-                        Segment {
-                            start: bottom_end,
-                            end: top_end,
-                        },
-                        Segment {
-                            start: top_end,
-                            end: top_start,
-                        },
-                        Segment {
-                            start: top_start,
-                            end: bottom_start,
-                        },
-                    ],
+                    interior: contour_index > 0,
+                    contours: vec![vec![bottom_start, bottom_end, top_end, top_start]],
                 });
             }
         }
     }
 }
 
-fn atomic_edges(faces: &[Face]) -> Vec<WireEdge> {
+fn atomic_edges(faces: &[Face]) -> Vec<AtomicEdge> {
     let mut lines: BTreeMap<LineKey, LineSegments> = BTreeMap::new();
 
     for (face, surface) in faces.iter().enumerate() {
-        for segment in &surface.edges {
-            let Some(coordinates) = line_coordinates(*segment) else {
+        for segment in face_segments(surface) {
+            let Some(coordinates) = line_coordinates(segment) else {
                 continue;
             };
             let line = lines.entry(coordinates.key).or_default();
@@ -219,6 +202,7 @@ fn atomic_edges(faces: &[Face]) -> Vec<WireEdge> {
                 start: coordinates.start.0.min(coordinates.end.0),
                 end: coordinates.start.0.max(coordinates.end.0),
                 face,
+                interior: segment.interior,
             });
         }
     }
@@ -239,16 +223,31 @@ fn atomic_edges(faces: &[Face]) -> Vec<WireEdge> {
                 continue;
             }
             let kind = classify_edge(faces, &incident);
-            result.push(WireEdge {
+            let interior = line.intervals.iter().any(|interval| {
+                interval.start <= start && end <= interval.end && interval.interior
+            });
+            result.push(AtomicEdge {
                 start: line.points[&start],
                 end: line.points[&end],
                 kind,
-                faces: incident.len() as u32,
+                interior,
+                incident,
             });
         }
     }
 
     result
+}
+
+fn face_segments(face: &Face) -> impl Iterator<Item = Segment> + '_ {
+    let face_interior = face.interior;
+    face.contours.iter().enumerate().flat_map(move |(contour_index, contour)| {
+        (0..contour.len()).map(move |index| Segment {
+            start: contour[index],
+            end: contour[(index + 1) % contour.len()],
+            interior: face_interior || contour_index > 0,
+        })
+    })
 }
 
 fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
@@ -403,34 +402,26 @@ mod tests {
             Face {
                 normal: [0, -1, 0],
                 material: 0,
-                edges: vec![Segment {
-                    start: [0, 0, 0],
-                    end: [10, 0, 0],
-                }],
+                interior: false,
+                contours: vec![vec![[0, 0, 0], [10, 0, 0]]],
             },
             Face {
                 normal: [0, -1, 0],
                 material: 1,
-                edges: vec![Segment {
-                    start: [0, 0, 0],
-                    end: [6, 0, 0],
-                }],
+                interior: false,
+                contours: vec![vec![[0, 0, 0], [6, 0, 0]]],
             },
             Face {
                 normal: [0, 0, 1],
                 material: 0,
-                edges: vec![Segment {
-                    start: [6, 0, 0],
-                    end: [7, 0, 0],
-                }],
+                interior: false,
+                contours: vec![vec![[6, 0, 0], [7, 0, 0]]],
             },
             Face {
                 normal: [0, -1, 0],
                 material: 1,
-                edges: vec![Segment {
-                    start: [7, 0, 0],
-                    end: [10, 0, 0],
-                }],
+                interior: false,
+                contours: vec![vec![[7, 0, 0], [10, 0, 0]]],
             },
         ];
 
@@ -439,7 +430,7 @@ mod tests {
         assert_eq!(edges[0].kind, EdgeKind::Material);
         assert_eq!(edges[1].kind, EdgeKind::Crease);
         assert_eq!(edges[2].kind, EdgeKind::Material);
-        assert!(edges.iter().all(|edge| edge.faces == 2));
+        assert!(edges.iter().all(|edge| edge.incident.len() == 2));
     }
 
     #[test]
@@ -464,7 +455,7 @@ mod tests {
             },
         ];
 
-        let edges = scene_edges(&volumes);
+        let (_, edges) = scene_geometry(&volumes);
         assert_eq!(
             edge_kind(&edges, [0, 0, -1500], [0, 0, 0]),
             Some(EdgeKind::Crease)
@@ -473,16 +464,33 @@ mod tests {
             edge_kind(&edges, [2, 1, 0], [2, 1, 1500]),
             Some(EdgeKind::Crease)
         );
+        assert_eq!(
+            edge_interior(&edges, [0, 0, -1500], [0, 0, 0]),
+            Some(false)
+        );
+        assert_eq!(
+            edge_interior(&edges, [2, 1, 0], [2, 1, 1500]),
+            Some(true)
+        );
         assert!(edges.iter().all(|edge| edge.kind != EdgeKind::Boundary));
     }
 
-    fn edge_kind(edges: &[WireEdge], start: Point3, end: Point3) -> Option<EdgeKind> {
+    fn edge_kind(edges: &[AtomicEdge], start: Point3, end: Point3) -> Option<EdgeKind> {
         edges
             .iter()
             .find(|edge| {
                 (edge.start == start && edge.end == end) || (edge.start == end && edge.end == start)
             })
             .map(|edge| edge.kind)
+    }
+
+    fn edge_interior(edges: &[AtomicEdge], start: Point3, end: Point3) -> Option<bool> {
+        edges
+            .iter()
+            .find(|edge| {
+                (edge.start == start && edge.end == end) || (edge.start == end && edge.end == start)
+            })
+            .map(|edge| edge.interior)
     }
 
     fn rectangle(left: i64, bottom: i64, right: i64, top: i64) -> Vec<[i64; 2]> {

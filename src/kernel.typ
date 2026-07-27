@@ -69,18 +69,21 @@
   _decode-shapes(result.shapes)
 }
 
-#let scene-topology(volumes) = {
+#let scene-topology(volumes, view) = {
   let result = cbor(geometry-kernel.scene_topology(cbor.encode((
     version: protocol-version,
     volumes: volumes.enumerate().map(
       ((index, volume)) => _encode-volume(volume, index),
     ),
+    view: view,
   ))))
   assert.eq(result.version, protocol-version)
   result.edges.map(edge => (
     start: _decode-point(edge.start),
     end: _decode-point(edge.end),
     kind: edge.kind,
+    interior: edge.interior,
+    visibility: edge.visibility,
     faces: edge.faces,
   ))
 }

@@ -106,7 +106,29 @@
   result
 }
 
-#let render-topology-debug(volumes) = {
+#let topology-debug-styles = (
+  outline: (
+    paint: rgb("#263843"),
+    thickness: .8pt,
+  ),
+  material: (
+    paint: rgb("#e98a15"),
+    thickness: .6pt,
+  ),
+  occluded: (
+    paint: rgb("#7c3aed"),
+    thickness: .45pt,
+    dash: "dashed",
+  ),
+  internal: (
+    paint: luma(55%),
+    thickness: .35pt,
+    dash: "dotted",
+  ),
+)
+
+#let render-topology-debug(volumes, view: none) = {
+  assert(view != none, message: "topology debug rendering requires a view")
   let debug-volumes = volumes.map(volume => {
     let debug-volume = volume
     debug-volume.stroke = none
@@ -122,32 +144,21 @@
   })
   render(debug-volumes)
 
-  let styles = (
-    boundary: (
-      paint: rgb("#7c3aed"),
-      thickness: .8pt,
-      dash: "dashed",
-    ),
-    crease: (
-      paint: rgb("#d1495b"),
-      thickness: .8pt,
-    ),
-    material: (
-      paint: rgb("#e98a15"),
-      thickness: .6pt,
-    ),
-    smooth: (
-      paint: luma(55%),
-      thickness: .35pt,
-      dash: "dotted",
-    ),
-  )
   draw.on-layer(100, {
-    for edge in kernel.scene-topology(volumes) {
+    for edge in kernel.scene-topology(volumes, view) {
+      let role = if edge.visibility == "occluded" {
+        "occluded"
+      } else if edge.kind == "material" {
+        "material"
+      } else if edge.interior or edge.kind == "smooth" {
+        "internal"
+      } else {
+        "outline"
+      }
       draw.line(
         edge.start,
         edge.end,
-        stroke: styles.at(edge.kind),
+        stroke: topology-debug-styles.at(role),
       )
     }
   })

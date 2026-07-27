@@ -5,6 +5,75 @@
   (0, 0, 0, 1),
 )
 
+#let _multiply-3(left, right) = (
+  (
+    left.at(0).at(0) * right.at(0).at(0)
+      + left.at(0).at(1) * right.at(1).at(0)
+      + left.at(0).at(2) * right.at(2).at(0),
+    left.at(0).at(0) * right.at(0).at(1)
+      + left.at(0).at(1) * right.at(1).at(1)
+      + left.at(0).at(2) * right.at(2).at(1),
+    left.at(0).at(0) * right.at(0).at(2)
+      + left.at(0).at(1) * right.at(1).at(2)
+      + left.at(0).at(2) * right.at(2).at(2),
+  ),
+  (
+    left.at(1).at(0) * right.at(0).at(0)
+      + left.at(1).at(1) * right.at(1).at(0)
+      + left.at(1).at(2) * right.at(2).at(0),
+    left.at(1).at(0) * right.at(0).at(1)
+      + left.at(1).at(1) * right.at(1).at(1)
+      + left.at(1).at(2) * right.at(2).at(1),
+    left.at(1).at(0) * right.at(0).at(2)
+      + left.at(1).at(1) * right.at(1).at(2)
+      + left.at(1).at(2) * right.at(2).at(2),
+  ),
+  (
+    left.at(2).at(0) * right.at(0).at(0)
+      + left.at(2).at(1) * right.at(1).at(0)
+      + left.at(2).at(2) * right.at(2).at(0),
+    left.at(2).at(0) * right.at(0).at(1)
+      + left.at(2).at(1) * right.at(1).at(1)
+      + left.at(2).at(2) * right.at(2).at(1),
+    left.at(2).at(0) * right.at(0).at(2)
+      + left.at(2).at(1) * right.at(1).at(2)
+      + left.at(2).at(2) * right.at(2).at(2),
+  ),
+)
+
+#let ortho-view(x, y, z: 0deg) = {
+  let sine-x = calc.sin(x)
+  let cosine-x = calc.cos(x)
+  let sine-y = calc.sin(y)
+  let cosine-y = calc.cos(y)
+  let sine-z = calc.sin(z)
+  let cosine-z = calc.cos(z)
+  let rotate-x = (
+    (1, 0, 0),
+    (0, cosine-x, -sine-x),
+    (0, sine-x, cosine-x),
+  )
+  let rotate-y = (
+    (cosine-y, 0, -sine-y),
+    (0, 1, 0),
+    (sine-y, 0, cosine-y),
+  )
+  let rotate-z = (
+    (cosine-z, -sine-z, 0),
+    (sine-z, cosine-z, 0),
+    (0, 0, 1),
+  )
+  let device-view = (
+    (1, 0, 0),
+    (0, 0, 1),
+    (0, -1, 0),
+  )
+  _multiply-3(
+    _multiply-3(_multiply-3(rotate-x, rotate-y), rotate-z),
+    device-view,
+  )
+}
+
 #let _inverse-transform-point(matrix, point) = {
   let ((a, b, c, tx), (d, e, f, ty), (g, h, i, tz), _) = matrix
   let determinant = (
