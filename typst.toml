@@ -1,10 +1,26 @@
 [package]
-name = "semi-illustrations"
+name = "mesa"
 version = "0.1.0"
 compiler = "0.14.0"
 entrypoint = "src/lib.typ"
-description = "Semiconductor device and fabrication-process illustrations with CeTZ"
+authors = ["Davide G. F. Lombardo <davide.lombardo@eit.lth.se>"]
+license = "MIT"
+description = "Draw semiconductor devices and fabrication processes."
 categories = ["visualization"]
 disciplines = ["engineering", "physics"]
 keywords = ["semiconductor", "fabrication", "layer-stack", "cetz"]
-exclude = ["examples", "inspiration"]
+exclude = [
+  "/.gitignore",
+  "/API.md",
+  "/Cargo.lock",
+  "/Cargo.toml",
+  "/ROADMAP.md",
+  "/assets/",
+  "/crates/",
+  "/examples/",
+  "/inspiration/",
+  "/scripts/",
+  "/target/",
+  "/tests/",
+  "/vendor/",
+]

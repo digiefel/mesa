@@ -6,16 +6,17 @@ How to describe a layer stack and render it in 2D or 3D.
 
 Supports:
 
-- horizontal layers with a shared rectangular footprint;
-- a thickness, material, and optional label for each layer;
-- 2D cross-section and 3D oblique rendering from the same stack;
+- rectangular and polygon-masked material layers;
+- GDS cells mapped to named masks;
+- directional deposition and etching;
+- 2D cross-sections, cut views, and 3D oblique rendering from the same scene;
 - package defaults with per-layer style overrides;
 - different styles of shading and lighting effects.
 
-## Proposed API
+## API
 
 ```typ
-#import "src/lib.typ" as semi
+#import "@preview/mesa:0.1.0" as semi
 
 #let sample = {
   import semi: *
@@ -86,6 +87,7 @@ layer(
   label-position: (center, horizon),
   bevel: auto,
   internal-stroke: auto,
+  mask: auto,
   ..style,
 )
 ```
@@ -101,6 +103,8 @@ layer(
 - `label-position` places the label in the face-local `(x, z)` plane.
 - `bevel` overrides the stack's bevel configuration for this layer.
 - `internal-stroke` overrides the stack's bevel-contour stroke.
+- `mask` limits the layer to polygon geometry. `mask.invert(...)` selects its
+  complement within the scene bounds.
 - extra named arguments override the selected material style.
 
 ```typ
@@ -111,6 +115,36 @@ layer("metal-3", thickness: 0.3, material: "metal", variant: 1)
 
 The first two layers use successive metal variants. The third explicitly uses
 variant 1. It still advances the metal occurrence counter.
+
+### Patterned geometry
+
+`gds` loads selected boundaries from a named GDS cell:
+
+```typ
+#let layout = semi.gds(
+  read("device.gds", encoding: none),
+  cell: "TOP",
+  layers: (
+    gate: (10, 0),
+    metal: (20, 0),
+  ),
+)
+
+#let sample = {
+  import semi: *
+
+  layer("substrate", thickness: 40, material: "substrate")
+  layer("oxide", thickness: 5, material: "dielectric")
+  layer("gate", thickness: 15, material: "metal", mask: layout.gate)
+  etch(depth: 5, mask: layout.metal)
+  layer("contacts", thickness: 10, material: "metal", mask: layout.metal)
+}
+
+#semi.layer-stack(sample, size: layout.size)
+```
+
+`etch` removes material vertically through its mask. An omitted mask applies
+the operation to the complete scene.
 
 ### Layer anchors and projected content
 
@@ -248,6 +282,8 @@ layer-stack(
   background: none,
   stroke: none,
   padding: none,
+  cut: none,
+  section: none,
   debug: none,
   canvas-debug: false,
 )
@@ -283,13 +319,9 @@ Changing the camera does not change the light direction, unshadowed
 brightness, or model-space shadow geometry.
 
 The light is infinitely far away, so all rays are parallel. Self-shadows are
-computed before rendering by projecting every other face along the light
-direction, including faces from the same layer. For the current aligned
-rectangular stacks, visibility is a single value for each face: if its centre
-is blocked, the complete face receives only the ambient term. The face is then
-rendered once at that brightness; no shadow overlay is drawn. This face-level
-assumption will need to change when the package supports offset or patterned
-process geometry.
+computed before rendering from the generated polygon faces, including faces
+from the same layer. Each face is rendered once at its computed brightness; no
+shadow overlay is drawn.
 
 `shading` accepts `"none"`, `"flat"`, and `"fancy"`. fancy keeps the
 material's `fill`, including hatches and dots, but adds one-segment chamfer

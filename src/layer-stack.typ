@@ -1099,6 +1099,7 @@
   })
 }
 
+/// Remove material vertically from the current scene.
 #let etch(depth: none, mask: auto) = {
   assert(
     type(depth) in (int, float) and depth > 0,
@@ -1147,6 +1148,7 @@
   })
 }
 
+/// Add a material layer to the current scene.
 #let layer(
   name,
   thickness: none,
@@ -1542,6 +1544,7 @@
   })
 }
 
+/// Draw a semiconductor scene in a CeTZ canvas.
 #let layer-stack(
   body,
   size: (80, 50),

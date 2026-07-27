@@ -10,6 +10,7 @@
   ),
 )
 
+/// Create a diagonal hatch tiling.
 #let hatch(
   background: white,
   color: rgb("#6f7c83"),
@@ -29,6 +30,7 @@
   ),
 )
 
+/// Create a crossed diagonal hatch tiling.
 #let crosshatch(
   background: white,
   color: rgb("#6f7c83"),
@@ -57,6 +59,7 @@
   },
 )
 
+/// Create a dotted tiling.
 #let dots(
   background: white,
   color: rgb("#6f7c83"),

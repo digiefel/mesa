@@ -1,14 +1,40 @@
-# Semiconductor device illustrations in Typst
+# Mesa
 
-This repository explores a Typst package, built on [CeTZ](https://github.com/cetz-package/cetz), for drawing semiconductor devices and fabrication processes.
+Draw 2D and 3D semiconductor devices and fabrication processes with
+[CeTZ](https://github.com/cetz-package/cetz), including patterned geometry
+loaded from GDS.
 
-## Goals
+![A transistor fabrication process rendered with Mesa](assets/mesa.png)
 
-- Make common layer stacks and process-flow illustrations concise to describe.
-- Provide consistent, pleasant defaults without preventing custom styling.
-- Support clear labels, dimensions, and other annotations.
-- Generate shaded 3D device illustrations from layout data such as GDS or an easily converted intermediate format.
+```typ
+#import "@preview/mesa:0.1.0" as semi
 
-## Current status
+#let sample = {
+  import semi: *
 
-The package is in its initial design phase.
+  layer(
+    "substrate",
+    thickness: 40,
+    material: "substrate",
+    label: [Si],
+  )
+  layer(
+    "oxide",
+    thickness: 5,
+    material: "dielectric",
+    label: [SiO#sub[2]],
+  )
+  layer(
+    "gate",
+    thickness: 15,
+    material: "metal",
+    label: [gate],
+  )
+}
+
+#semi.layer-stack(
+  sample,
+  camera: (azimuth: 35deg, elevation: 35deg),
+  shading: "fancy",
+)
+```

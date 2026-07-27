@@ -2,6 +2,7 @@
 
 #let edge = rgb("#26343a")
 
+/// Default material styles used by layer-stack.
 #let default-palette = (
   default: (
     (
