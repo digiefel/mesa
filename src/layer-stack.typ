@@ -4,7 +4,7 @@
 #let _device-to-cetz = (
   (1, 0, 0, 0),
   (0, 0, 1, 0),
-  (0, 1, 0, 0),
+  (0, -1, 0, 0),
   (0, 0, 0, 1),
 )
 
@@ -24,7 +24,7 @@
   (
     calc.sin(azimuth) * horizontal,
     calc.cos(azimuth) * horizontal,
-    calc.sin(elevation),
+    -calc.sin(elevation),
   )
 }
 
@@ -60,6 +60,8 @@
   vector.at(1) * factor,
   vector.at(2) * factor,
 )
+
+#let _toward-light(light) = _scale(_direction(light), -1)
 
 #let _cross(a, b) = (
   a.at(1) * b.at(2) - a.at(2) * b.at(1),
@@ -192,8 +194,8 @@
     message: "shading must be \"none\", \"flat\", or \"fancy\"",
   )
 
-  let light-direction = _direction(light)
-  let cosine = calc.max(0, _dot(normal, light-direction))
+  let toward-light = _toward-light(light)
+  let cosine = calc.max(0, _dot(normal, toward-light))
   let ambient = 1 - _light-intensity(light)
   let direct = _light-intensity(light) * visibility * cosine
   ambient + direct
@@ -219,8 +221,8 @@
   )
 }
 
-#let _shadow-polygons(receiver, faces, light-direction) = {
-  let denominator = _dot(receiver.normal, light-direction)
+#let _shadow-polygons(receiver, faces, toward-light) = {
+  let denominator = _dot(receiver.normal, toward-light)
   if denominator <= 1e-6 {
     return ()
   }
@@ -230,7 +232,7 @@
   for occluder in faces {
     if (
       occluder.layer != receiver.layer
-      and _dot(occluder.normal, light-direction) > 1e-6
+      and _dot(occluder.normal, toward-light) > 1e-6
     ) {
       let distance = point => _dot(
         _subtract(point, basis.origin),
@@ -240,7 +242,7 @@
       if clipped.len() >= 3 {
         let projected = clipped.map(point => {
           let amount = distance(point) / denominator
-          _subtract(point, _scale(light-direction, amount))
+          _subtract(point, _scale(toward-light, amount))
         })
         let local = projected.map(point => _to-face-plane(point, basis))
         if _signed-polygon-area(local) < 0 {
@@ -274,11 +276,11 @@
     return 1
   }
 
-  let light-direction = _direction(light)
-  if _dot(receiver.normal, light-direction) <= 1e-6 {
+  let toward-light = _toward-light(light)
+  if _dot(receiver.normal, toward-light) <= 1e-6 {
     return 1
   }
-  let polygons = _shadow-polygons(receiver, faces, light-direction)
+  let polygons = _shadow-polygons(receiver, faces, toward-light)
   if polygons.len() == 0 {
     return 1
   }
@@ -372,10 +374,10 @@
   let (x, y, z) = point
 
   (
-    calc.cos(azimuth) * x - calc.sin(azimuth) * y,
+    calc.cos(azimuth) * x + calc.sin(azimuth) * y,
     -calc.cos(elevation) * z
       + calc.sin(elevation)
-        * (calc.sin(azimuth) * x + calc.cos(azimuth) * y),
+        * (calc.sin(azimuth) * x - calc.cos(azimuth) * y),
   )
 }
 
@@ -400,7 +402,7 @@
   }
 }
 
-#let _project-face-content(body, camera, face) = {
+#let project-face-content(body, camera, face) = {
   let elevation = camera.at("elevation", default: 0deg)
   let (horizontal-x, horizontal-y) = _face-horizontal(camera, face)
   let vertical-y = calc.cos(elevation)
@@ -963,16 +965,57 @@
 }
 
 #let _draw-scene() = {
+  cetz.draw.set-ctx(ctx => {
+    let state = ctx.shared-state.semi
+    let diagnostics = ()
+    let layer-names = state.layers.keys()
+    for (index, face) in state.faces.enumerate() {
+      let visibility = _face-visibility(
+        face,
+        state.faces,
+        face.shading,
+        face.light,
+      )
+      let cosine = calc.max(0, _dot(
+        face.normal,
+        _toward-light(face.light),
+      ))
+      diagnostics.push((
+        index: index,
+        layer: face.layer,
+        layer-name: if face.layer < layer-names.len() {
+          layer-names.at(face.layer)
+        } else {
+          str(face.layer)
+        },
+        points: face.points,
+        center: _scale(
+          face.points.fold(
+            (0, 0, 0),
+            (sum, point) => _add(sum, point),
+          ),
+          1 / face.points.len(),
+        ),
+        normal: face.normal,
+        cosine: cosine,
+        visibility: visibility,
+        brightness: _face-brightness(
+          face.normal,
+          face.shading,
+          face.light,
+          visibility: visibility,
+        ),
+      ))
+    }
+    state.face-diagnostics = diagnostics
+    ctx.shared-state.semi = state
+    ctx
+  })
+
   cetz.draw.get-ctx(ctx => {
     let state = ctx.shared-state.semi
     cetz.draw.on-layer(-1, {
-      for face in state.faces {
-        let visibility = _face-visibility(
-          face,
-          state.faces,
-          face.shading,
-          face.light,
-        )
+      for (index, face) in state.faces.enumerate() {
         _render-face(
           face.points,
           face.normal,
@@ -980,7 +1023,7 @@
           face.shading,
           face.light,
           face.camera,
-          visibility,
+          state.face-diagnostics.at(index).visibility,
         )
       }
       for outline in state.outlines {
@@ -1389,7 +1432,8 @@
   background: none,
   stroke: none,
   padding: none,
-  debug: false,
+  debug: none,
+  canvas-debug: false,
 ) = {
   assert(
     type(size) == array and size.len() == 2,
@@ -1403,6 +1447,10 @@
     message: "internal-strokes must be a boolean",
   )
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
+  assert(
+    type(canvas-debug) == bool,
+    message: "canvas-debug must be a boolean",
+  )
   assert(
     label-transform in ("none", "rotate", "project"),
     message: "label-transform must be \"none\", \"rotate\", or \"project\"",
@@ -1422,13 +1470,14 @@
     background: background,
     stroke: stroke,
     padding: padding,
-    debug: debug,
+    debug: canvas-debug,
     {
       cetz.draw.set-ctx(ctx => {
         ctx.shared-state.semi = (
           size: size,
           height: 0,
           faces: (),
+          face-diagnostics: (),
           outlines: (),
           face-contents: (),
           layers: (:),
@@ -1452,12 +1501,15 @@
           cetz.draw.transform(_device-to-cetz)
           body
           _draw-scene()
+          if debug != none {
+            cetz.draw.on-layer(2, debug)
+          }
         },
       )
 
       cetz.draw.on-layer(1, {
         cetz.draw.get-ctx(ctx => {
-          let label-face = if calc.sin(azimuth) > 0 {
+          let label-face = if calc.sin(azimuth) < 0 {
             "back"
           } else {
             "front"
@@ -1489,7 +1541,7 @@
               item.transform
             }
             let body = if transform == "project" {
-              _project-face-content(item.body, camera, face)
+              project-face-content(item.body, camera, face)
             } else {
               item.body
             }

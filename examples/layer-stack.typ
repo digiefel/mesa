@@ -5,8 +5,8 @@
 #set text(size: 9pt, font: "Helvetica")
 
 #let sample-light = (
-  azimuth: 5deg,
-  elevation: 60deg,
+  azimuth: 25deg,
+  elevation: 55deg,
   intensity: 0.25,
 )
 
@@ -50,8 +50,8 @@
   // an annotation
   draw.set-style(content: (padding: 2pt))
   draw.line(
-    (rel: (2, 0), to: "metal.front-right-bottom"),
-    (rel: (2, 0), to: "metal.front-right-top"),
+    (rel: (1.5, 0), to: "metal.back-right-bottom"),
+    (rel: (1.5, 0), to: "metal.back-right-top"),
     name: "metal-t",
     mark: (start: "|", end: "|"),
     stroke: .55pt,
@@ -99,6 +99,7 @@
         sample,
         light: sample-light,
         shading: "fancy",
+        bevel: (top: 0.5, bottom: 0.25),
       )
     ]
   ],
@@ -117,3 +118,30 @@
     ]
   ],
 )
+
+#pagebreak()
+
+#align(center)[
+  #semi.layer-stack(
+    sample,
+    label-transform: "project",
+    camera: (
+      azimuth: 35deg,
+      elevation: 35deg,
+    ),
+    light: sample-light,
+    shading: "fancy",
+    debug: {
+      import semi.debug: *
+
+      axes()
+      light()
+      face-info(
+        faces: ("front", "right"),
+        layers: "resist",
+        values: ("cosine", "visibility", "brightness"),
+      )
+      normals(faces: "top", layers: "resist")
+    },
+  )
+]

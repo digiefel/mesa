@@ -3,3 +3,4 @@
 #import "fills.typ": hatch, crosshatch, dots
 #import "layer-stack.typ": face-content, layer, layer-stack
 #import "palette.typ": default-palette
+#import "debug.typ" as debug

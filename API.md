@@ -223,7 +223,8 @@ layer-stack(
   background: none,
   stroke: none,
   padding: none,
-  debug: false,
+  debug: none,
+  canvas-debug: false,
 )
 ```
 
@@ -234,12 +235,18 @@ The default camera is the front cross-section. `azimuth` rotates around the
 vertical axis; `elevation` moves above the substrate plane. Changing either
 angle reveals the depth of the same stack.
 
-`light` uses the same angular coordinates as `camera`, but its direction is
-independent of the camera. "Flat" and "fancy" shading use the same directional
-Lambertian calculation and directional self-shadowing for every face:
+`light` uses the same angular convention as `camera`, but its direction is
+independent of the camera. The angles define the direction in which the light
+travels. "Flat" and "fancy" shading use the same directional Lambertian
+calculation and directional self-shadowing for every face:
+
+Azimuth `0deg` travels along `+y`, from the visible front into the sample.
+Positive azimuth rotates toward `+x`. Elevation `0deg` lies in the `x-y`
+plane, and positive elevation travels toward `-z`, from above toward the
+sample.
 
 ```text
-cosine = max(0, dot(face-normal, light-direction))
+cosine = max(0, dot(face-normal, -light-direction))
 visibility = 0 if sample geometry blocks the light, otherwise 1
 brightness = (1 - intensity) + intensity * visibility * cosine
 ```
@@ -284,10 +291,54 @@ applies the face's full orthographic projection, including foreshortening and
 shear. `"rotate"` only aligns the baseline with the face, while `"none"` keeps
 labels horizontal on the page.
 
-`length`, `baseline`, `background`, `stroke`, `padding`, and `debug` are passed
-to `cetz.canvas`. `length` specifies the rendered length of one model unit and
-defaults to `.8mm`. The default front view is 64 mm wide; an oblique view is
-approximately half-column width on an A4 page.
+`debug` accepts a CeTZ-style body evaluated after the final stack geometry and
+lighting values are known:
+
+```typ
+#semi.layer-stack(
+  sample,
+  debug: {
+    import semi.debug: *
+
+    axes()
+    light()
+    face-info(
+      faces: ("front", "right"),
+      layers: "resist",
+      values: ("cosine", "visibility", "brightness"),
+    )
+    normals(faces: "top", layers: "resist")
+  },
+)
+```
+
+`light()` draws one ray toward the sample by default, with an open chevron at
+its midpoint, and reports azimuth, elevation, and intensity. It also shows the
+zero-azimuth reference, the horizontal and vertical projections of the light
+direction, and separate azimuth and elevation arcs. Set `angles: false` to
+hide that construction or `rays` to draw additional parallel rays.
+`axes()` and `light()` share an origin on a model-space sphere centred on the
+sample's top face. Its radius is 75% of the sample's three-dimensional
+diagonal. The origin depends on the light direction, not the camera, so camera
+movement only changes its projection. The light ray points from that origin
+toward the sphere centre.
+`face-info()` attaches a projected box directly to each selected side face
+using the exact normal, cosine, visibility, and brightness values already
+computed by the renderer; `normals()` draws the corresponding geometric
+normals. By default, `face-info()` selects the visible side faces from the
+camera angle. The optional `faces` and `layers` arguments can focus either
+helper on specific geometry.
+
+Face names are fixed in model space: `"front"` is `y = 0`, `"back"` is
+`y = depth`, `"left"` is `x = 0`, and `"right"` is `x = width`. Camera
+rotation never changes those meanings. `faces: auto` only chooses among those
+objective names according to which side faces are visible.
+
+`length`, `baseline`, `background`, `stroke`, and `padding` are passed to
+`cetz.canvas`. `canvas-debug` separately controls CeTZ's bounding-box debugger.
+`length` specifies the rendered length of one model unit and defaults to
+`.8mm`. The default front view is 64 mm wide; an oblique view is approximately
+half-column width on an A4 page.
 
 The canvas `x`, `y`, and `z` arguments are not exposed. `layer-stack` controls
 the coordinate basis to implement device coordinates and the camera.
@@ -299,6 +350,8 @@ The package uses device coordinates:
 - `x`: width;
 - `y`: depth;
 - `z`: height.
+
+The coordinate system is right-handed: `x × y = z`.
 
 The substrate lies in the `x-y` plane. The `z` direction is normal to the
 substrate plane, i.e. "up". The default camera shows the `x-z` cross-section.
