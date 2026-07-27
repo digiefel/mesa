@@ -765,7 +765,18 @@
 #let _render-scene-face(face, volume) = {
   let normal = _unit(face.normal)
   let style = volume.style
-  let fill = style.at("fill", default: none)
+  let bevel-face = (
+    calc.abs(normal.at(2)) > 1e-6
+      and (
+        calc.abs(normal.at(0)) > 1e-6
+          or calc.abs(normal.at(1)) > 1e-6
+      )
+  )
+  let fill = if bevel-face {
+    style.at("base-color", default: style.at("fill", default: none))
+  } else {
+    style.at("fill", default: none)
+  }
   let fade-bottom = style.at("fade-bottom", default: none)
   let fades = fade-bottom != none and normal.at(2) == 0
   let brightness = _face-brightness(
@@ -850,6 +861,18 @@
 }
 
 #let _render-scene-edge(edge, volumes, value) = {
+  if edge.kind == "bevel" {
+    let values = edge.materials.map(
+      material => volumes.at(material).style.at(
+        "internal-stroke",
+        default: none,
+      ),
+    ).filter(value => value != none)
+    if values.len() == 0 {
+      return
+    }
+    value = values.first()
+  }
   if edge.materials.len() == 1 {
     let volume = volumes.at(edge.materials.first())
     let fade-bottom = volume.style.at("fade-bottom", default: none)
@@ -1475,6 +1498,7 @@
           shapes: placement.shapes,
           bottom: placement.bottom,
           top: placement.top,
+          top-bevel: top-bevel,
           top-fill: fill,
           side-fill: fill,
           section-fill: fill,

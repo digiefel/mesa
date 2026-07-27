@@ -559,12 +559,14 @@ mod tests {
                 bottom: 0,
                 top: 1_000,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: vec![vec![rectangle(4_000, -1_000, 6_000, 3_000)]],
                 bottom: 2_000,
                 top: 3_000,
                 material: 1,
+                top_bevel: 0,
             },
         ];
         let edges = scene_edges(
@@ -611,12 +613,14 @@ mod tests {
                 bottom: -1_500,
                 top: 0,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: result,
                 bottom: 0,
                 top: 1_500,
                 material: 1,
+                top_bevel: 0,
             },
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());
@@ -665,18 +669,21 @@ mod tests {
                 bottom: 0,
                 top: 40_000,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: oxide,
                 bottom: 40_000,
                 top: 45_000,
                 material: 1,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: contacts,
                 bottom: 40_000,
                 top: 50_000,
                 material: 2,
+                top_bevel: 0,
             },
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());

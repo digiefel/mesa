@@ -4,6 +4,8 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay::Overlay;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::i_shape::int::shape::IntShapes;
+use i_overlay::mesh::outline::offset::OutlineOffset;
+use i_overlay::mesh::style::{LineJoin, OutlineStyle};
 use serde::Deserialize;
 
 use crate::{WireShapes, from_int_shapes, to_int_shapes};
@@ -16,6 +18,8 @@ pub(crate) struct WireVolume {
     pub(crate) bottom: i64,
     pub(crate) top: i64,
     pub(crate) material: u32,
+    #[serde(default, rename = "top-bevel")]
+    pub(crate) top_bevel: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -23,8 +27,20 @@ pub(crate) struct WireVolume {
 pub(crate) enum EdgeKind {
     Boundary,
     Crease,
+    Bevel,
     Material,
     Smooth,
+}
+
+#[derive(Clone, Debug)]
+struct TopBevel {
+    material: u32,
+    top: i64,
+    shoulder: i64,
+    interior: bool,
+    original: Vec<[i64; 2]>,
+    inset: Vec<[i64; 2]>,
+    lines: BTreeSet<LineKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +125,13 @@ pub(crate) fn validate_volumes(volumes: &[WireVolume]) -> Result<(), String> {
                 volume.top, volume.bottom
             ));
         }
+        if volume.top_bevel < 0 || volume.top_bevel >= volume.top - volume.bottom {
+            return Err(format!(
+                "volume {index} requires 0 <= top_bevel < thickness; got {} for thickness {}",
+                volume.top_bevel,
+                volume.top - volume.bottom,
+            ));
+        }
         crate::validate_shapes(&format!("volume {index}"), &volume.shapes)?;
     }
     Ok(())
@@ -128,9 +151,14 @@ pub(crate) fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
             ..volume.clone()
         })
         .collect();
+    let mut vertical_faces = Vec::new();
+    add_exposed_vertical_faces(&mut vertical_faces, &canonical);
+    let bevels = top_bevels(&canonical, &vertical_faces);
+    shorten_vertical_faces(&mut vertical_faces, &bevels);
     let mut faces = Vec::new();
 
     for (index, volume) in canonical.iter().enumerate() {
+        let top_shapes = inset_beveled_contours(&volume.shapes, volume.material, &bevels);
         let top_cover = union_shapes(
             canonical
                 .iter()
@@ -138,7 +166,7 @@ pub(crate) fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
                 .filter(|(other_index, other)| *other_index != index && other.bottom == volume.top)
                 .map(|(_, other)| &other.shapes),
         );
-        let exposed_top = difference_shapes(&volume.shapes, &top_cover);
+        let exposed_top = difference_shapes(&top_shapes, &top_cover);
         add_horizontal_faces(
             &mut faces,
             &exposed_top,
@@ -162,11 +190,352 @@ pub(crate) fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
             [0, 0, -1],
             volume.material,
         );
-
     }
 
-    add_exposed_vertical_faces(&mut faces, &canonical);
+    add_top_bevel_faces(&mut faces, &bevels);
+    faces.extend(vertical_faces);
     faces
+}
+
+fn top_bevels(volumes: &[WireVolume], vertical_faces: &[Face]) -> Vec<TopBevel> {
+    let mut result = Vec::new();
+    for volume in volumes {
+        if volume.top_bevel == 0 {
+            continue;
+        }
+        let shoulder = volume.top - volume.top_bevel;
+        let exposed = exposed_top_lines(volume, shoulder, vertical_faces);
+        for shape in &volume.shapes {
+            for (contour_index, contour) in shape.iter().enumerate() {
+                let lines: BTreeSet<LineKey> = contour
+                    .iter()
+                    .zip(contour.iter().cycle().skip(1))
+                    .filter_map(|(&start, &end)| xy_line_coordinates(start, end))
+                    .map(|coordinates| coordinates.key)
+                    .collect();
+                if lines.len() != contour.len() || !contour_top_is_exposed(contour, &exposed) {
+                    continue;
+                }
+                let Some(inset) = inset_contour(contour, volume.top_bevel) else {
+                    continue;
+                };
+                result.push(TopBevel {
+                    material: volume.material,
+                    top: volume.top,
+                    shoulder,
+                    interior: contour_index > 0,
+                    original: contour.clone(),
+                    inset,
+                    lines,
+                });
+            }
+        }
+    }
+    result
+}
+
+fn exposed_top_lines(
+    volume: &WireVolume,
+    shoulder: i64,
+    vertical_faces: &[Face],
+) -> BTreeMap<LineKey, Vec<(i128, i128)>> {
+    let mut result: BTreeMap<LineKey, Vec<(i128, i128)>> = BTreeMap::new();
+    for face in vertical_faces
+        .iter()
+        .filter(|face| face.material == volume.material)
+    {
+        let Some(contour) = face.contours.first() else {
+            continue;
+        };
+        let bottom = contour.iter().map(|point| point[2]).min().unwrap_or(0);
+        let top = contour.iter().map(|point| point[2]).max().unwrap_or(0);
+        if top != volume.top || bottom > shoulder || contour.len() < 2 {
+            continue;
+        }
+        let Some(coordinates) = xy_line_coordinates(
+            [contour[0][0], contour[0][1]],
+            [contour[1][0], contour[1][1]],
+        ) else {
+            continue;
+        };
+        result.entry(coordinates.key).or_default().push((
+            coordinates.start.0.min(coordinates.end.0),
+            coordinates.start.0.max(coordinates.end.0),
+        ));
+    }
+    for spans in result.values_mut() {
+        spans.sort_unstable();
+    }
+    result
+}
+
+fn contour_top_is_exposed(
+    contour: &[[i64; 2]],
+    exposed: &BTreeMap<LineKey, Vec<(i128, i128)>>,
+) -> bool {
+    contour
+        .iter()
+        .zip(contour.iter().cycle().skip(1))
+        .all(|(&start, &end)| {
+            let Some(coordinates) = xy_line_coordinates(start, end) else {
+                return false;
+            };
+            let start = coordinates.start.0.min(coordinates.end.0);
+            let end = coordinates.start.0.max(coordinates.end.0);
+            let Some(spans) = exposed.get(&coordinates.key) else {
+                return false;
+            };
+            let mut cursor = start;
+            for &(span_start, span_end) in spans {
+                if span_end <= cursor || end <= span_start {
+                    continue;
+                }
+                if cursor < span_start {
+                    return false;
+                }
+                cursor = cursor.max(span_end);
+                if cursor >= end {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn inset_contour(contour: &[[i64; 2]], distance: i64) -> Option<Vec<[i64; 2]>> {
+    let sign = signed_area(contour).signum();
+    let mut path: Vec<[f64; 2]> = contour
+        .iter()
+        .map(|point| [point[0] as f64, point[1] as f64])
+        .collect();
+    if sign < 0 {
+        path.reverse();
+    }
+    let style = OutlineStyle::new(if sign < 0 {
+        distance as f64
+    } else {
+        -(distance as f64)
+    })
+    .line_join(LineJoin::Miter(0.01));
+    let shapes = path.outline_as::<i64>(&style);
+    let expected = miter_inset(contour, distance)?;
+    let expected_sign = sign as f64;
+    let mut candidates = shapes
+        .into_iter()
+        .flatten()
+        .map(|mut candidate| {
+            if sign < 0 {
+                candidate.reverse();
+            }
+            candidate
+        })
+        .filter(|candidate| {
+            candidate.len() == contour.len()
+                && float_signed_area(candidate).signum() == expected_sign
+        });
+    let candidate = candidates.next()?;
+    if candidates.next().is_some() {
+        return None;
+    }
+    align_contour(
+        candidate
+            .into_iter()
+            .map(|point| [point[0].round() as i64, point[1].round() as i64])
+            .collect(),
+        &expected,
+    )
+}
+
+fn miter_inset(contour: &[[i64; 2]], distance: i64) -> Option<Vec<[i64; 2]>> {
+    let mut result = Vec::with_capacity(contour.len());
+    for index in 0..contour.len() {
+        let previous = contour[(index + contour.len() - 1) % contour.len()];
+        let current = contour[index];
+        let next = contour[(index + 1) % contour.len()];
+        let first = offset_line(previous, current, distance)?;
+        let second = offset_line(current, next, distance)?;
+        let point = line_intersection(first, second)?;
+        result.push([point[0].round() as i64, point[1].round() as i64]);
+    }
+    (signed_area(&result).signum() == signed_area(contour).signum()).then_some(result)
+}
+
+fn offset_line(start: [i64; 2], end: [i64; 2], distance: i64) -> Option<([f64; 2], [f64; 2])> {
+    let direction = [(end[0] - start[0]) as f64, (end[1] - start[1]) as f64];
+    let length = direction[0].hypot(direction[1]);
+    if length == 0.0 {
+        return None;
+    }
+    let normal = [-direction[1] / length, direction[0] / length];
+    Some((
+        [
+            start[0] as f64 + normal[0] * distance as f64,
+            start[1] as f64 + normal[1] * distance as f64,
+        ],
+        direction,
+    ))
+}
+
+fn line_intersection(
+    first: ([f64; 2], [f64; 2]),
+    second: ([f64; 2], [f64; 2]),
+) -> Option<[f64; 2]> {
+    let denominator = first.1[0] * second.1[1] - first.1[1] * second.1[0];
+    if denominator.abs() < 1e-9 {
+        return None;
+    }
+    let offset = [second.0[0] - first.0[0], second.0[1] - first.0[1]];
+    let distance = (offset[0] * second.1[1] - offset[1] * second.1[0]) / denominator;
+    Some([
+        first.0[0] + first.1[0] * distance,
+        first.0[1] + first.1[1] * distance,
+    ])
+}
+
+fn float_signed_area(contour: &[[f64; 2]]) -> f64 {
+    contour
+        .iter()
+        .zip(contour.iter().cycle().skip(1))
+        .map(|([x0, y0], [x1, y1])| x0 * y1 - y0 * x1)
+        .sum()
+}
+
+fn align_contour(contour: Vec<[i64; 2]>, expected: &[[i64; 2]]) -> Option<Vec<[i64; 2]>> {
+    let mut best = None;
+    for reverse in [false, true] {
+        let mut candidate = contour.clone();
+        if reverse {
+            candidate.reverse();
+        }
+        for shift in 0..candidate.len() {
+            let aligned: Vec<[i64; 2]> = (0..candidate.len())
+                .map(|index| candidate[(index + shift) % candidate.len()])
+                .collect();
+            let error = aligned
+                .iter()
+                .zip(expected)
+                .map(|(point, target)| {
+                    let dx = i128::from(point[0] - target[0]);
+                    let dy = i128::from(point[1] - target[1]);
+                    dx * dx + dy * dy
+                })
+                .sum::<i128>();
+            if best
+                .as_ref()
+                .is_none_or(|(best_error, _)| error < *best_error)
+            {
+                best = Some((error, aligned));
+            }
+        }
+    }
+    best.map(|(_, contour)| contour)
+}
+
+fn inset_beveled_contours(shapes: &WireShapes, material: u32, bevels: &[TopBevel]) -> WireShapes {
+    shapes
+        .iter()
+        .map(|shape| {
+            shape
+                .iter()
+                .map(|contour| {
+                    bevels
+                        .iter()
+                        .find(|bevel| bevel.material == material && bevel.original == *contour)
+                        .map_or_else(|| contour.clone(), |bevel| bevel.inset.clone())
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn add_top_bevel_faces(faces: &mut Vec<Face>, bevels: &[TopBevel]) {
+    for bevel in bevels {
+        for index in 0..bevel.original.len() {
+            let next = (index + 1) % bevel.original.len();
+            let [x0, y0] = bevel.original[index];
+            let [x1, y1] = bevel.original[next];
+            let [ix0, iy0] = bevel.inset[index];
+            let [ix1, iy1] = bevel.inset[next];
+            let points = vec![
+                [x0, y0, bevel.shoulder],
+                [x1, y1, bevel.shoulder],
+                [ix1, iy1, bevel.top],
+                [ix0, iy0, bevel.top],
+            ];
+            let normal = cross_wide(
+                [
+                    points[1][0] - points[0][0],
+                    points[1][1] - points[0][1],
+                    points[1][2] - points[0][2],
+                ],
+                [
+                    points[2][0] - points[0][0],
+                    points[2][1] - points[0][1],
+                    points[2][2] - points[0][2],
+                ],
+            );
+            let divisor = gcd(gcd(normal[0] as i64, normal[1] as i64), normal[2] as i64);
+            if divisor == 0 {
+                continue;
+            }
+            faces.push(Face {
+                normal: [
+                    normal[0] as i64 / divisor,
+                    normal[1] as i64 / divisor,
+                    normal[2] as i64 / divisor,
+                ],
+                material: bevel.material,
+                interior: bevel.interior,
+                contours: vec![points],
+            });
+        }
+    }
+}
+
+fn shorten_vertical_faces(faces: &mut Vec<Face>, bevels: &[TopBevel]) {
+    for face in faces.iter_mut() {
+        let Some(bevel) = bevels.iter().find(|bevel| {
+            if bevel.material != face.material {
+                return false;
+            }
+            let Some(contour) = face.contours.first() else {
+                return false;
+            };
+            if contour.len() < 2 {
+                return false;
+            }
+            let Some(coordinates) = xy_line_coordinates(
+                [contour[0][0], contour[0][1]],
+                [contour[1][0], contour[1][1]],
+            ) else {
+                return false;
+            };
+            bevel.lines.contains(&coordinates.key)
+                && contour.iter().any(|point| point[2] == bevel.top)
+        }) else {
+            continue;
+        };
+        for contour in &mut face.contours {
+            for point in contour {
+                if point[2] == bevel.top {
+                    point[2] = bevel.shoulder;
+                }
+            }
+        }
+    }
+    faces.retain(|face| {
+        face.contours.iter().flatten().map(|point| point[2]).min()
+            != face.contours.iter().flatten().map(|point| point[2]).max()
+            || face.normal[2] != 0
+    });
+}
+
+fn xy_line_coordinates(start: [i64; 2], end: [i64; 2]) -> Option<LineCoordinates> {
+    line_coordinates(Segment {
+        start: [start[0], start[1], 0],
+        end: [end[0], end[1], 0],
+        interior: false,
+    })
 }
 
 fn add_horizontal_faces(
@@ -376,13 +745,16 @@ fn atomic_edges(faces: &[Face]) -> Vec<AtomicEdge> {
 
 fn face_segments(face: &Face) -> impl Iterator<Item = Segment> + '_ {
     let face_interior = face.interior;
-    face.contours.iter().enumerate().flat_map(move |(contour_index, contour)| {
-        (0..contour.len()).map(move |index| Segment {
-            start: contour[index],
-            end: contour[(index + 1) % contour.len()],
-            interior: face_interior || contour_index > 0,
+    face.contours
+        .iter()
+        .enumerate()
+        .flat_map(move |(contour_index, contour)| {
+            (0..contour.len()).map(move |index| Segment {
+                start: contour[index],
+                end: contour[(index + 1) % contour.len()],
+                interior: face_interior || contour_index > 0,
+            })
         })
-    })
 }
 
 fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
@@ -391,6 +763,22 @@ fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
     }
 
     let incident: Vec<&Face> = incident.iter().map(|index| &faces[*index]).collect();
+    if incident
+        .iter()
+        .map(|face| face.material)
+        .collect::<BTreeSet<_>>()
+        .len()
+        > 1
+    {
+        return EdgeKind::Material;
+    }
+
+    let is_bevel =
+        |face: &&Face| face.normal[2] != 0 && (face.normal[0] != 0 || face.normal[1] != 0);
+    if incident.iter().any(is_bevel) && incident.iter().any(|face| face.normal[2] == 0) {
+        return EdgeKind::Bevel;
+    }
+
     for (index, face) in incident.iter().enumerate() {
         for other in incident.iter().skip(index + 1) {
             if cross_wide(face.normal, other.normal) != [0, 0, 0] {
@@ -399,17 +787,7 @@ fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
         }
     }
 
-    if incident
-        .iter()
-        .map(|face| face.material)
-        .collect::<BTreeSet<_>>()
-        .len()
-        > 1
-    {
-        EdgeKind::Material
-    } else {
-        EdgeKind::Smooth
-    }
+    EdgeKind::Smooth
 }
 
 fn line_coordinates(segment: Segment) -> Option<LineCoordinates> {
@@ -532,6 +910,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decodes_the_typst_top_bevel_wire_field() {
+        #[derive(serde::Serialize)]
+        struct VolumePayload<'a> {
+            shapes: &'a WireShapes,
+            bottom: i64,
+            top: i64,
+            material: u32,
+            #[serde(rename = "top-bevel")]
+            top_bevel: i64,
+        }
+
+        let shapes = vec![vec![rectangle(0, 0, 10_000, 8_000)]];
+        let mut bytes = Vec::new();
+        ciborium::into_writer(
+            &VolumePayload {
+                shapes: &shapes,
+                bottom: 0,
+                top: 5_000,
+                material: 0,
+                top_bevel: 500,
+            },
+            &mut bytes,
+        )
+        .unwrap();
+        let volume: WireVolume = ciborium::from_reader(bytes.as_slice()).unwrap();
+
+        assert_eq!(volume.top_bevel, 500);
+    }
+
+    #[test]
     fn splits_overlapping_collinear_edges_before_classification() {
         let faces = vec![
             Face {
@@ -581,12 +989,14 @@ mod tests {
                 bottom: -1500,
                 top: 0,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: result,
                 bottom: 0,
                 top: 1500,
                 material: 1,
+                top_bevel: 0,
             },
         ];
 
@@ -599,14 +1009,8 @@ mod tests {
             edge_kind(&edges, [2, 1, 0], [2, 1, 1500]),
             Some(EdgeKind::Crease)
         );
-        assert_eq!(
-            edge_interior(&edges, [0, 0, -1500], [0, 0, 0]),
-            Some(false)
-        );
-        assert_eq!(
-            edge_interior(&edges, [2, 1, 0], [2, 1, 1500]),
-            Some(true)
-        );
+        assert_eq!(edge_interior(&edges, [0, 0, -1500], [0, 0, 0]), Some(false));
+        assert_eq!(edge_interior(&edges, [2, 1, 0], [2, 1, 1500]), Some(true));
         assert!(edges.iter().all(|edge| edge.kind != EdgeKind::Boundary));
     }
 
@@ -621,30 +1025,37 @@ mod tests {
                 bottom: 0,
                 top: 40,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: oxide,
                 bottom: 40,
                 top: 45,
                 material: 1,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: contact,
                 bottom: 40,
                 top: 50,
                 material: 2,
+                top_bevel: 0,
             },
         ];
 
         let faces = scene_faces(&volumes);
-        assert!(!faces
-            .iter()
-            .any(|face| face.material == 0 && face.normal == [0, 0, 1]));
-        assert!(faces
-            .iter()
-            .filter(|face| face.material == 2 && face.normal[2] == 0)
-            .flat_map(|face| face.contours.iter().flatten())
-            .all(|point| point[2] >= 45));
+        assert!(
+            !faces
+                .iter()
+                .any(|face| face.material == 0 && face.normal == [0, 0, 1])
+        );
+        assert!(
+            faces
+                .iter()
+                .filter(|face| face.material == 2 && face.normal[2] == 0)
+                .flat_map(|face| face.contours.iter().flatten())
+                .all(|point| point[2] >= 45)
+        );
     }
 
     #[test]
@@ -657,12 +1068,14 @@ mod tests {
                 bottom: 0,
                 top: 40,
                 material: 0,
+                top_bevel: 0,
             },
             WireVolume {
                 shapes: upper,
                 bottom: 40,
                 top: 50,
                 material: 1,
+                top_bevel: 0,
             },
         ];
 
@@ -675,6 +1088,112 @@ mod tests {
         assert_eq!(
             substrate_front[0].contours,
             vec![vec![[0, 0, 0], [10, 0, 0], [10, 0, 40], [0, 0, 40]]]
+        );
+    }
+
+    #[test]
+    fn builds_a_real_top_bevel_for_a_polygon_volume() {
+        let volumes = vec![WireVolume {
+            shapes: vec![vec![rectangle(0, 0, 10_000, 8_000)]],
+            bottom: 0,
+            top: 5_000,
+            material: 0,
+            top_bevel: 1_000,
+        }];
+
+        let (faces, edges) = scene_geometry(&volumes);
+        let bevel_faces: Vec<&Face> = faces
+            .iter()
+            .filter(|face| face.normal[2] != 0 && (face.normal[0] != 0 || face.normal[1] != 0))
+            .collect();
+        assert_eq!(bevel_faces.len(), 4);
+        assert!(bevel_faces.iter().all(|face| {
+            face.contours.iter().flatten().map(|point| point[2]).min() == Some(4_000)
+        }));
+
+        let top = faces.iter().find(|face| face.normal == [0, 0, 1]).unwrap();
+        let top_points: BTreeSet<Point3> = top.contours.iter().flatten().copied().collect();
+        assert_eq!(
+            top_points,
+            BTreeSet::from([
+                [1_000, 1_000, 5_000],
+                [9_000, 1_000, 5_000],
+                [9_000, 7_000, 5_000],
+                [1_000, 7_000, 5_000],
+            ])
+        );
+        assert_eq!(
+            edge_kind(&edges, [0, 0, 4_000], [10_000, 0, 4_000]),
+            Some(EdgeKind::Bevel)
+        );
+        assert_eq!(
+            edge_kind(&edges, [1_000, 1_000, 5_000], [9_000, 1_000, 5_000]),
+            Some(EdgeKind::Crease)
+        );
+    }
+
+    #[test]
+    fn bevels_an_exposed_hole_but_not_a_buried_material_interface() {
+        let outer = rectangle(0, 0, 10_000, 10_000);
+        let hole: Vec<[i64; 2]> = rectangle(3_000, 3_000, 7_000, 7_000)
+            .into_iter()
+            .rev()
+            .collect();
+        assert!(inset_contour(&hole, 500).is_some());
+        let void_faces = scene_faces(&[WireVolume {
+            shapes: vec![vec![outer.clone(), hole.clone()]],
+            bottom: 0,
+            top: 2_000,
+            material: 0,
+            top_bevel: 500,
+        }]);
+        assert_eq!(
+            void_faces
+                .iter()
+                .filter(|face| {
+                    face.normal[2] != 0 && (face.normal[0] != 0 || face.normal[1] != 0)
+                })
+                .count(),
+            8
+        );
+
+        let material_faces = scene_faces(&[
+            WireVolume {
+                shapes: vec![vec![outer, hole]],
+                bottom: 0,
+                top: 1_000,
+                material: 0,
+                top_bevel: 500,
+            },
+            WireVolume {
+                shapes: vec![vec![rectangle(3_000, 3_000, 7_000, 7_000)]],
+                bottom: 0,
+                top: 2_000,
+                material: 1,
+                top_bevel: 500,
+            },
+        ]);
+        assert_eq!(
+            material_faces
+                .iter()
+                .filter(|face| {
+                    face.material == 0
+                        && face.normal[2] != 0
+                        && (face.normal[0] != 0 || face.normal[1] != 0)
+                })
+                .count(),
+            4
+        );
+        assert_eq!(
+            material_faces
+                .iter()
+                .filter(|face| {
+                    face.material == 1
+                        && face.normal[2] != 0
+                        && (face.normal[0] != 0 || face.normal[1] != 0)
+                })
+                .count(),
+            4
         );
     }
 

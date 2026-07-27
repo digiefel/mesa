@@ -132,6 +132,8 @@
 #let _normal-edge-role(edge) = {
   if edge.visibility == "occluded" or edge.kind == "smooth" {
     none
+  } else if edge.kind == "bevel" {
+    "internal"
   } else if edge.kind == "material" {
     "material"
   } else if edge.interior {

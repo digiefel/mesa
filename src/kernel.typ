@@ -53,6 +53,9 @@
   bottom: int(calc.round(volume.bottom * grid-scale)),
   top: int(calc.round(volume.top * grid-scale)),
   material: material,
+  top-bevel: int(calc.round(
+    volume.at("top-bevel", default: 0) * grid-scale,
+  )),
 )
 
 #let difference(subject, mask) = {
