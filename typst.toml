@@ -6,9 +6,10 @@ entrypoint = "src/lib.typ"
 authors = ["Davide G. F. Lombardo <davide.lombardo@eit.lth.se>"]
 license = "MIT"
 description = "Draw semiconductor devices and fabrication processes."
+repository = "https://github.com/digiefel/mesa"
 categories = ["visualization"]
 disciplines = ["engineering", "physics"]
-keywords = ["semiconductor", "fabrication", "layer-stack", "cetz"]
+keywords = ["semiconductor", "visualization", "process-flow", "cetz"]
 exclude = [
   "/.gitignore",
   "/API.md",
