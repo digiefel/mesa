@@ -60,6 +60,7 @@ Supports:
   light: (
     azimuth: -45deg,
     elevation: 60deg,
+    intensity: 0.25,
   ),
 )
 ```
@@ -83,6 +84,7 @@ layer(
   label: none,
   label-transform: auto,
   label-position: (center, horizon),
+  bevel: auto,
   ..style,
 )
 ```
@@ -96,6 +98,7 @@ layer(
 - `label-transform` overrides the stack's label transformation for this layer.
   Its default, `auto`, inherits the `layer-stack` setting.
 - `label-position` places the label in the face-local `(x, z)` plane.
+- `bevel` overrides the stack's bevel configuration for this layer.
 - extra named arguments override the selected material style.
 
 ```typ
@@ -156,12 +159,18 @@ tilings:
 layer(
   "metal",
   thickness: 0.4,
+  base-color: rgb("#d8c27a"),
   fill: hatch(
     background: rgb("#d8c27a"),
     color: rgb("#8e762c"),
   ),
 )
 ```
+
+`base-color` is the solid material colour used on bevel faces. This prevents a
+tiling from restarting independently on every chamfer. The default material
+styles provide it. A custom patterned `fill` should normally provide a matching
+`base-color`; a solid-colour `fill` is used automatically.
 
 `fade-bottom` fades a material between two depths measured from its top:
 
@@ -203,7 +212,10 @@ layer-stack(
   light: (
     azimuth: -45deg,
     elevation: 60deg,
+    intensity: 0.25,
   ),
+  bevel: (top: 0.5, bottom: 0.25),
+  internal-strokes: false,
   palette: (:),
   label-transform: "project",
   length: .8mm,
@@ -222,9 +234,50 @@ The default camera is the front cross-section. `azimuth` rotates around the
 vertical axis; `elevation` moves above the substrate plane. Changing either
 angle reveals the depth of the same stack.
 
-`light` uses the same angular coordinates as `camera`. `shading` chooses how
-material colors respond to that light. `palette` changes material defaults;
+`light` uses the same angular coordinates as `camera`, but its direction is
+independent of the camera. "Flat" and "fancy" shading use the same directional
+Lambertian calculation and directional self-shadowing for every face:
+
+```text
+cosine = max(0, dot(face-normal, light-direction))
+visibility = 0 if sample geometry blocks the light, otherwise 1
+brightness = (1 - intensity) + intensity * visibility * cosine
+```
+
+`intensity` accepts a number from `0` to `1` or an equivalent ratio. At `0`,
+all face orientations retain the material colour; at `1`, unshadowed points
+use the unmodified cosine term and shadowed points receive no direct light.
+Changing the camera does not change the light direction, unshadowed
+brightness, or model-space shadow geometry.
+
+The light is infinitely far away, so all rays are parallel. Self-shadows are
+computed before rendering by projecting light-facing layer faces along the
+light direction. For the current aligned rectangular stacks, visibility is a
+single value for each face: if its centre is blocked, the complete face
+receives only the ambient term. The face is then rendered once at that
+brightness; no shadow overlay is drawn. This face-level assumption will need
+to change when the package supports offset or patterned process geometry.
+
+`shading` accepts `"none"`, `"flat"`, and `"fancy"`. fancy keeps the
+material's `fill`, including hatches and dots, but adds one-segment chamfer
+faces at exposed layer tops and bottoms. `palette` changes material defaults;
 per-layer style arguments still take precedence.
+
+`bevel` controls the chamfer geometry used by fancy shading. A number applies
+the same model-space depth at the top and bottom. A ratio is relative to the
+layer thickness. A dictionary configures them independently:
+
+```typ
+bevel: (top: 0.5, bottom: 0.25)
+bevel: (top: 8%, bottom: 4%)
+```
+
+The layer-level `bevel` argument overrides this configuration. A fading
+substrate has no visible bottom edge, so its bottom bevel is suppressed.
+
+`internal-strokes` defaults to `false`: chamfer mesh boundaries are not
+outlined, while the exterior layer outline remains. Set it to `true` to stroke
+every face boundary.
 
 `label-transform` controls how labels follow the layer face. `"project"`
 applies the face's full orthographic projection, including foreshortening and

@@ -23,7 +23,7 @@
 
   (
     calc.sin(azimuth) * horizontal,
-    -calc.cos(azimuth) * horizontal,
+    calc.cos(azimuth) * horizontal,
     calc.sin(elevation),
   )
 }
@@ -34,18 +34,268 @@
   + a.at(2) * b.at(2)
 )
 
-#let _face-brightness(normal, shading, light) = {
+#let _unit(vector) = {
+  let length = calc.sqrt(_dot(vector, vector))
+  if length == 0 {
+    vector
+  } else {
+    vector.map(component => component / length)
+  }
+}
+
+#let _add(a, b) = (
+  a.at(0) + b.at(0),
+  a.at(1) + b.at(1),
+  a.at(2) + b.at(2),
+)
+
+#let _subtract(a, b) = (
+  a.at(0) - b.at(0),
+  a.at(1) - b.at(1),
+  a.at(2) - b.at(2),
+)
+
+#let _scale(vector, factor) = (
+  vector.at(0) * factor,
+  vector.at(1) * factor,
+  vector.at(2) * factor,
+)
+
+#let _cross(a, b) = (
+  a.at(1) * b.at(2) - a.at(2) * b.at(1),
+  a.at(2) * b.at(0) - a.at(0) * b.at(2),
+  a.at(0) * b.at(1) - a.at(1) * b.at(0),
+)
+
+#let _clip-polygon(points, distance, epsilon: 1e-6) = {
+  if points.len() == 0 {
+    return ()
+  }
+
+  let result = ()
+  let previous = points.last()
+  let previous-distance = distance(previous)
+  let previous-inside = previous-distance > epsilon
+
+  for current in points {
+    let current-distance = distance(current)
+    let current-inside = current-distance > epsilon
+    if current-inside != previous-inside {
+      let amount = (
+        (epsilon - previous-distance)
+        / (current-distance - previous-distance)
+      )
+      result.push(_add(
+        previous,
+        _scale(_subtract(current, previous), amount),
+      ))
+    }
+    if current-inside {
+      result.push(current)
+    }
+    previous = current
+    previous-distance = current-distance
+    previous-inside = current-inside
+  }
+  result
+}
+
+#let _signed-polygon-area(points) = {
+  if points.len() < 3 {
+    return 0
+  }
+  let twice-area = 0
+  for index in range(points.len()) {
+    let current = points.at(index)
+    let next = points.at(calc.rem(index + 1, points.len()))
+    let cross = current.at(0) * next.at(1) - current.at(1) * next.at(0)
+    twice-area += cross
+  }
+  twice-area / 2
+}
+
+#let _polygon-area(points) = calc.abs(_signed-polygon-area(points))
+
+#let _cross-2d(a, b) = a.at(0) * b.at(1) - a.at(1) * b.at(0)
+
+#let _light-intensity(light) = {
+  let value = light.at("intensity", default: 0.25)
+  let value = if type(value) == ratio {
+    value / 100%
+  } else {
+    value
+  }
+  assert(
+    type(value) in (int, float) and value >= 0 and value <= 1,
+    message: "light intensity must be between 0 and 1",
+  )
+  value
+}
+
+#let _resolve-bevel-value(value, thickness, name) = {
+  assert(
+    type(value) in (int, float, ratio),
+    message: name + " bevel must be a number or ratio",
+  )
+  let result = if type(value) == ratio {
+    thickness * (value / 100%)
+  } else {
+    value
+  }
+  assert(result >= 0, message: name + " bevel must be non-negative")
+  result
+}
+
+#let _bevel-config(value, thickness, width, depth, fade-bottom) = {
+  let value = if value == none {
+    (top: 0, bottom: 0)
+  } else if type(value) in (int, float, ratio) {
+    (top: value, bottom: value)
+  } else {
+    assert(
+      type(value) == dictionary,
+      message: "bevel must be none, a number, a ratio, or a dictionary",
+    )
+    value
+  }
+  let top = _resolve-bevel-value(
+    value.at("top", default: 0),
+    thickness,
+    "top",
+  )
+  let bottom = if fade-bottom == none {
+    _resolve-bevel-value(
+      value.at("bottom", default: 0),
+      thickness,
+      "bottom",
+    )
+  } else {
+    0
+  }
+  assert(
+    top + bottom < thickness,
+    message: "top and bottom bevels must leave a positive vertical face",
+  )
+  assert(
+    calc.max(top, bottom) < calc.min(width, depth) / 2,
+    message: "bevel is too large for the layer footprint",
+  )
+  (top: top, bottom: bottom)
+}
+
+#let _face-brightness(normal, shading, light, visibility: 1) = {
   if shading == "none" {
     return 1
   }
-  assert.eq(
-    shading,
-    "flat",
-    message: "shading must be \"none\" or \"flat\"",
+  assert(
+    shading in ("flat", "fancy"),
+    message: "shading must be \"none\", \"flat\", or \"fancy\"",
   )
 
-  let diffuse = calc.max(0, _dot(normal, _direction(light)))
-  0.58 + 0.42 * diffuse
+  let light-direction = _direction(light)
+  let cosine = calc.max(0, _dot(normal, light-direction))
+  let ambient = 1 - _light-intensity(light)
+  let direct = _light-intensity(light) * visibility * cosine
+  ambient + direct
+}
+
+#let _face-basis(face) = {
+  let origin = face.points.first()
+  let u = _unit(_subtract(face.points.at(1), origin))
+  let v = _unit(_cross(face.normal, u))
+  (
+    origin: origin,
+    u: u,
+    v: v,
+  )
+}
+
+#let _to-face-plane(point, basis) = {
+  let relative = _subtract(point, basis.origin)
+  (
+    _dot(relative, basis.u),
+    _dot(relative, basis.v),
+    0,
+  )
+}
+
+#let _shadow-polygons(receiver, faces, light-direction) = {
+  let denominator = _dot(receiver.normal, light-direction)
+  if denominator <= 1e-6 {
+    return ()
+  }
+
+  let basis = _face-basis(receiver)
+  let polygons = ()
+  for occluder in faces {
+    if (
+      occluder.layer != receiver.layer
+      and _dot(occluder.normal, light-direction) > 1e-6
+    ) {
+      let distance = point => _dot(
+        _subtract(point, basis.origin),
+        receiver.normal,
+      )
+      let clipped = _clip-polygon(occluder.points, distance)
+      if clipped.len() >= 3 {
+        let projected = clipped.map(point => {
+          let amount = distance(point) / denominator
+          _subtract(point, _scale(light-direction, amount))
+        })
+        let local = projected.map(point => _to-face-plane(point, basis))
+        if _signed-polygon-area(local) < 0 {
+          local = local.rev()
+        }
+        if _polygon-area(local) > 1e-8 {
+          polygons.push(local)
+        }
+      }
+    }
+  }
+  polygons
+}
+
+#let _point-in-convex(point, polygon, epsilon: 1e-6) = {
+  for index in range(polygon.len()) {
+    let start = polygon.at(index)
+    let end = polygon.at(calc.rem(index + 1, polygon.len()))
+    if _cross-2d(
+      _subtract(end, start),
+      _subtract(point, start),
+    ) < -epsilon {
+      return false
+    }
+  }
+  true
+}
+
+#let _face-visibility(receiver, faces, shading, light) = {
+  if shading == "none" or _light-intensity(light) == 0 {
+    return 1
+  }
+
+  let light-direction = _direction(light)
+  if _dot(receiver.normal, light-direction) <= 1e-6 {
+    return 1
+  }
+  let polygons = _shadow-polygons(receiver, faces, light-direction)
+  if polygons.len() == 0 {
+    return 1
+  }
+
+  let basis = _face-basis(receiver)
+  let center = receiver.points.map(
+    point => _to-face-plane(point, basis),
+  ).fold(
+    (0, 0, 0),
+    (sum, point) => _add(sum, point),
+  )
+  center = _scale(center, 1 / receiver.points.len())
+  if polygons.any(polygon => _point-in-convex(center, polygon)) {
+    0
+  } else {
+    1
+  }
 }
 
 #let _fade-config(value) = {
@@ -365,6 +615,15 @@
   )
 }
 
+#let _softened-stroke(value) = {
+  let base = stroke(value)
+  let paint = if base.paint == auto { black } else { base.paint }
+  if type(paint) != color {
+    return base
+  }
+  _stroke-with-paint(base, paint.transparentize(18%))
+}
+
 #let _draw-faded-outline(points, value, config, camera) = {
   let heights = points.map(point => point.at(2))
   let top = calc.max(..heights)
@@ -406,6 +665,123 @@
       )
     }
   }
+}
+
+#let _draw-faded-edge(high, low, value, config, camera) = {
+  let base = stroke(value)
+  let paint = if base.paint == auto { black } else { base.paint }
+  let projected-high = _project(high, camera)
+  let projected-low = _project(low, camera)
+  let direction = (
+    projected-low.at(0) - projected-high.at(0),
+    projected-low.at(1) - projected-high.at(1),
+  )
+  let outline-paint = gradient.linear(
+    .._fade-stops(
+      paint,
+      config.color,
+      config.start,
+      config.end,
+    ),
+    angle: calc.atan2(direction.at(0), direction.at(1)),
+    relative: "self",
+  )
+  cetz.draw.line(
+    high,
+    low,
+    stroke: _stroke-with-paint(base, outline-paint),
+  )
+}
+
+#let _draw-beveled-outline(
+  width,
+  depth,
+  bottom,
+  top,
+  top-bevel,
+  bottom-bevel,
+  style,
+  camera,
+) = {
+  let value = style.at("stroke", default: 1pt + black)
+  if value == none {
+    return
+  }
+  let value = _softened-stroke(value)
+  let top-shoulder = top - top-bevel
+  let bottom-shoulder = bottom + bottom-bevel
+  let outer = (
+    (0, 0),
+    (width, 0),
+    (width, depth),
+    (0, depth),
+  )
+  let top-ring = (
+    (top-bevel, top-bevel, top),
+    (width - top-bevel, top-bevel, top),
+    (width - top-bevel, depth - top-bevel, top),
+    (top-bevel, depth - top-bevel, top),
+  )
+  let bottom-ring = (
+    (bottom-bevel, bottom-bevel, bottom),
+    (width - bottom-bevel, bottom-bevel, bottom),
+    (width - bottom-bevel, depth - bottom-bevel, bottom),
+    (bottom-bevel, depth - bottom-bevel, bottom),
+  )
+  let fade-bottom = style.at("fade-bottom", default: none)
+  let fade-config = if fade-bottom == none {
+    none
+  } else {
+    _fade-config(fade-bottom)
+  }
+
+  cetz.draw.line(..top-ring, close: true, stroke: value)
+  if fade-config == none {
+    cetz.draw.line(..bottom-ring, close: true, stroke: value)
+  }
+  for index in range(4) {
+    let corner = outer.at(index)
+    let lower = (corner.at(0), corner.at(1), bottom-shoulder)
+    let upper = (corner.at(0), corner.at(1), top-shoulder)
+    if fade-config == none {
+      let points = (
+        bottom-ring.at(index),
+        lower,
+        upper,
+        top-ring.at(index),
+      )
+      cetz.draw.line(..points, stroke: value)
+    } else {
+      _draw-faded-edge(upper, lower, value, fade-config, camera)
+      let points = (upper, top-ring.at(index))
+      cetz.draw.line(..points, stroke: value)
+    }
+  }
+}
+
+#let _queue-beveled-outline(
+  width,
+  depth,
+  bottom,
+  top,
+  top-bevel,
+  bottom-bevel,
+  style,
+  camera,
+) = {
+  cetz.draw.set-ctx(ctx => {
+    ctx.shared-state.semi.outlines.push((
+      width: width,
+      depth: depth,
+      bottom: bottom,
+      top: top,
+      top-bevel: top-bevel,
+      bottom-bevel: bottom-bevel,
+      style: style,
+      camera: camera,
+    ))
+    ctx
+  })
 }
 
 #let _material-style(material, variant, occurrence, local-style, palette) = {
@@ -453,17 +829,50 @@
     message: "material variants must be colors or style dictionaries",
   )
 
-  _merge-dictionaries(style, local-style.named())
+  let local-style = local-style.named()
+  let result = _merge-dictionaries(style, local-style)
+  if "fill" in local-style and "base-color" not in local-style {
+    if type(local-style.fill) == color {
+      result.base-color = local-style.fill
+    } else if "base-color" in result {
+      let _ = result.remove("base-color")
+    }
+  }
+  result
 }
 
-#let _face(points, normal, style, shading, light, camera) = {
+#let _render-face(
+  points,
+  normal,
+  style,
+  shading,
+  light,
+  camera,
+  visibility,
+) = {
   let face-style = style
   let fade-bottom = face-style.at("fade-bottom", default: none)
   if "fade-bottom" in face-style {
     let _ = face-style.remove("fade-bottom")
   }
+  if "base-color" in face-style {
+    let _ = face-style.remove("base-color")
+  }
   let fill = face-style.at("fill", default: none)
-  let brightness = _face-brightness(normal, shading, light)
+  let brightness = _face-brightness(
+    normal,
+    shading,
+    light,
+    visibility: visibility,
+  )
+  let outline = style.at("stroke", default: 1pt + black)
+  let outline = if outline == none {
+    none
+  } else if shading == "fancy" {
+    _softened-stroke(outline)
+  } else {
+    outline
+  }
   let fades = fade-bottom != none and normal.at(2) == 0
   let config = if fades { _fade-config(fade-bottom) } else { none }
   let geometry = if fades {
@@ -472,7 +881,7 @@
     none
   }
   let shaded-fill = if type(fill) == color {
-    fill.darken((1 - brightness) * 38%)
+    fill.darken((1 - brightness) * 100%)
   } else {
     fill
   }
@@ -499,6 +908,9 @@
     face-style.stroke = none
   } else {
     face-style.fill = shaded-fill
+    if "stroke" in face-style {
+      face-style.stroke = outline
+    }
   }
 
   cetz.draw.line(
@@ -507,23 +919,84 @@
     ..face-style,
   )
 
-  if shading == "flat" and fill != none and type(fill) != color {
+  if (
+    shading in ("flat", "fancy")
+    and fill != none
+    and type(fill) != color
+  ) {
     cetz.draw.line(
       ..points,
       close: true,
-      fill: black.transparentize(100% - (1 - brightness) * 24%),
+      fill: black.transparentize(brightness * 100%),
       stroke: none,
     )
   }
 
-  if fades {
+  if fades and outline != none {
     _draw-faded-outline(
       points,
-      style.at("stroke", default: 1pt + black),
+      outline,
       config,
       camera,
     )
   }
+}
+
+#let _face(points, normal, style, shading, light, camera) = {
+  if style.at("fade-bottom", default: none) != none and normal.at(2) < 0 {
+    return
+  }
+  cetz.draw.set-ctx(ctx => {
+    let state = ctx.shared-state.semi
+    state.faces.push((
+      layer: state.layers.len(),
+      points: points,
+      normal: normal,
+      style: style,
+      shading: shading,
+      light: light,
+      camera: camera,
+    ))
+    ctx.shared-state.semi = state
+    ctx
+  })
+}
+
+#let _draw-scene() = {
+  cetz.draw.get-ctx(ctx => {
+    let state = ctx.shared-state.semi
+    cetz.draw.on-layer(-1, {
+      for face in state.faces {
+        let visibility = _face-visibility(
+          face,
+          state.faces,
+          face.shading,
+          face.light,
+        )
+        _render-face(
+          face.points,
+          face.normal,
+          face.style,
+          face.shading,
+          face.light,
+          face.camera,
+          visibility,
+        )
+      }
+      for outline in state.outlines {
+        _draw-beveled-outline(
+          outline.width,
+          outline.depth,
+          outline.bottom,
+          outline.top,
+          outline.top-bevel,
+          outline.bottom-bevel,
+          outline.style,
+          outline.camera,
+        )
+      }
+    })
+  })
 }
 
 #let layer(
@@ -534,6 +1007,7 @@
   label: none,
   label-transform: auto,
   label-position: (center, horizon),
+  bevel: auto,
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
@@ -578,88 +1052,232 @@
       state.palette,
     )
     let visual-middle = _automatic-label-z(resolved-style)
+    let bevel = if state.shading == "fancy" {
+      _bevel-config(
+        if bevel == auto { state.bevel } else { bevel },
+        thickness,
+        width,
+        depth,
+        resolved-style.at("fade-bottom", default: none),
+      )
+    } else {
+      (top: 0, bottom: 0)
+    }
+    let top-bevel = bevel.top
+    let bottom-bevel = bevel.bottom
+    let top-shoulder = top - top-bevel
+    let bottom-shoulder = bottom + bottom-bevel
+    let render-style = resolved-style
+    if state.shading == "fancy" and not state.internal-strokes {
+      render-style.stroke = none
+    }
+    let bevel-style = render-style
+    let bevel-color = resolved-style.at("base-color", default: none)
+    if bevel-color != none {
+      bevel-style.fill = bevel-color
+    }
 
     cetz.draw.group(
       name: name,
       {
         _face(
           (
-            (0, depth, bottom),
-            (width, depth, bottom),
-            (width, depth, top),
-            (0, depth, top),
+            (0, depth, bottom-shoulder),
+            (width, depth, bottom-shoulder),
+            (width, depth, top-shoulder),
+            (0, depth, top-shoulder),
           ),
           (0, 1, 0),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
         _face(
           (
-            (0, 0, bottom),
-            (0, depth, bottom),
-            (width, depth, bottom),
-            (width, 0, bottom),
+            (bottom-bevel, bottom-bevel, bottom),
+            (bottom-bevel, depth - bottom-bevel, bottom),
+            (width - bottom-bevel, depth - bottom-bevel, bottom),
+            (width - bottom-bevel, bottom-bevel, bottom),
           ),
           (0, 0, -1),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
         _face(
           (
-            (0, 0, bottom),
-            (0, 0, top),
-            (0, depth, top),
-            (0, depth, bottom),
+            (0, 0, bottom-shoulder),
+            (0, 0, top-shoulder),
+            (0, depth, top-shoulder),
+            (0, depth, bottom-shoulder),
           ),
           (-1, 0, 0),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
         _face(
           (
-            (width, 0, bottom),
-            (width, depth, bottom),
-            (width, depth, top),
-            (width, 0, top),
+            (width, 0, bottom-shoulder),
+            (width, depth, bottom-shoulder),
+            (width, depth, top-shoulder),
+            (width, 0, top-shoulder),
           ),
           (1, 0, 0),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
+        if top-bevel > 0 {
+          _face(
+            (
+              (0, depth, top-shoulder),
+              (width, depth, top-shoulder),
+              (width - top-bevel, depth - top-bevel, top),
+              (top-bevel, depth - top-bevel, top),
+            ),
+            _unit((0, 1, 1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (0, 0, top-shoulder),
+              (top-bevel, top-bevel, top),
+              (width - top-bevel, top-bevel, top),
+              (width, 0, top-shoulder),
+            ),
+            _unit((0, -1, 1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (0, 0, top-shoulder),
+              (0, depth, top-shoulder),
+              (top-bevel, depth - top-bevel, top),
+              (top-bevel, top-bevel, top),
+            ),
+            _unit((-1, 0, 1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (width, 0, top-shoulder),
+              (width - top-bevel, top-bevel, top),
+              (width - top-bevel, depth - top-bevel, top),
+              (width, depth, top-shoulder),
+            ),
+            _unit((1, 0, 1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+        }
+        if bottom-bevel > 0 {
+          _face(
+            (
+              (0, depth, bottom-shoulder),
+              (bottom-bevel, depth - bottom-bevel, bottom),
+              (width - bottom-bevel, depth - bottom-bevel, bottom),
+              (width, depth, bottom-shoulder),
+            ),
+            _unit((0, 1, -1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (0, 0, bottom-shoulder),
+              (width, 0, bottom-shoulder),
+              (width - bottom-bevel, bottom-bevel, bottom),
+              (bottom-bevel, bottom-bevel, bottom),
+            ),
+            _unit((0, -1, -1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (0, 0, bottom-shoulder),
+              (bottom-bevel, bottom-bevel, bottom),
+              (bottom-bevel, depth - bottom-bevel, bottom),
+              (0, depth, bottom-shoulder),
+            ),
+            _unit((-1, 0, -1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+          _face(
+            (
+              (width, 0, bottom-shoulder),
+              (width, depth, bottom-shoulder),
+              (width - bottom-bevel, depth - bottom-bevel, bottom),
+              (width - bottom-bevel, bottom-bevel, bottom),
+            ),
+            _unit((1, 0, -1)),
+            bevel-style,
+            state.shading,
+            state.light,
+            state.camera,
+          )
+        }
         _face(
           (
-            (0, 0, top),
-            (width, 0, top),
-            (width, depth, top),
-            (0, depth, top),
+            (top-bevel, top-bevel, top),
+            (width - top-bevel, top-bevel, top),
+            (width - top-bevel, depth - top-bevel, top),
+            (top-bevel, depth - top-bevel, top),
           ),
           (0, 0, 1),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
         _face(
           (
-            (0, 0, bottom),
-            (width, 0, bottom),
-            (width, 0, top),
-            (0, 0, top),
+            (0, 0, bottom-shoulder),
+            (width, 0, bottom-shoulder),
+            (width, 0, top-shoulder),
+            (0, 0, top-shoulder),
           ),
           (0, -1, 0),
-          resolved-style,
+          render-style,
           state.shading,
           state.light,
           state.camera,
         )
+        if state.shading == "fancy" and not state.internal-strokes {
+          _queue-beveled-outline(
+            width,
+            depth,
+            bottom,
+            top,
+            top-bevel,
+            bottom-bevel,
+            resolved-style,
+            state.camera,
+          )
+        }
 
         cetz.draw.anchor("bottom", (width / 2, depth / 2, bottom))
         cetz.draw.anchor("top", (width / 2, depth / 2, top))
@@ -760,7 +1378,10 @@
   light: (
     azimuth: -45deg,
     elevation: 60deg,
+    intensity: 0.25,
   ),
+  bevel: (top: 0.5, bottom: 0.25),
+  internal-strokes: false,
   palette: (:),
   label-transform: "project",
   length: .8mm,
@@ -777,12 +1398,19 @@
   assert(size.all(value => value > 0), message: "size values must be positive")
   assert(type(camera) == dictionary, message: "camera must be a dictionary")
   assert(type(light) == dictionary, message: "light must be a dictionary")
+  assert(
+    type(internal-strokes) == bool,
+    message: "internal-strokes must be a boolean",
+  )
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
   assert(
     label-transform in ("none", "rotate", "project"),
     message: "label-transform must be \"none\", \"rotate\", or \"project\"",
   )
-  assert(shading in ("none", "flat"), message: "unknown shading mode")
+  assert(
+    shading in ("none", "flat", "fancy"),
+    message: "unknown shading mode",
+  )
 
   let active-palette = _merge-dictionaries(default-palette, palette)
   let azimuth = camera.at("azimuth", default: 0deg)
@@ -800,12 +1428,16 @@
         ctx.shared-state.semi = (
           size: size,
           height: 0,
+          faces: (),
+          outlines: (),
           face-contents: (),
           layers: (:),
           material-counts: (:),
           palette: active-palette,
           shading: shading,
           light: light,
+          bevel: bevel,
+          internal-strokes: internal-strokes,
           camera: camera,
         )
         ctx
@@ -819,6 +1451,7 @@
         {
           cetz.draw.transform(_device-to-cetz)
           body
+          _draw-scene()
         },
       )
 

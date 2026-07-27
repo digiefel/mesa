@@ -5,6 +5,7 @@
 #let default-palette = (
   default: (
     (
+      base-color: rgb("#e7ecee"),
       fill: hatch(
         background: rgb("#e7ecee"),
         color: rgb("#aab7bc"),
@@ -15,6 +16,7 @@
   ),
   substrate: (
     (
+      base-color: rgb("#b9cbd0"),
       fill: rgb("#b9cbd0"),
       stroke: .55pt + edge,
       fade-bottom: (
@@ -26,6 +28,7 @@
   ),
   dielectric: (
     (
+      base-color: rgb("#ccebf3"),
       fill: hatch(
         background: rgb("#ccebf3"),
         color: rgb("#71b8c9"),
@@ -35,6 +38,7 @@
       stroke: .55pt + edge,
     ),
     (
+      base-color: rgb("#d9d9f2"),
       fill: hatch(
         background: rgb("#d9d9f2"),
         color: rgb("#9696c8"),
@@ -44,6 +48,7 @@
       stroke: .55pt + edge,
     ),
     (
+      base-color: rgb("#cce7de"),
       fill: hatch(
         background: rgb("#cce7de"),
         color: rgb("#75ad9a"),
@@ -55,6 +60,7 @@
   ),
   metal: (
     (
+      base-color: rgb("#e3c66f"),
       fill: hatch(
         background: rgb("#e3c66f"),
         color: rgb("#a9852e"),
@@ -65,6 +71,7 @@
       stroke: .55pt + edge,
     ),
     (
+      base-color: rgb("#d7a17c"),
       fill: hatch(
         background: rgb("#d7a17c"),
         color: rgb("#985f3d"),
@@ -75,6 +82,7 @@
       stroke: .55pt + edge,
     ),
     (
+      base-color: rgb("#cbd3d6"),
       fill: hatch(
         background: rgb("#cbd3d6"),
         color: rgb("#7b8b91"),
@@ -87,6 +95,7 @@
   ),
   resist: (
     (
+      base-color: rgb("#c9dfa2"),
       fill: dots(
         background: rgb("#c9dfa2"),
         color: rgb("#7fa254"),
@@ -96,6 +105,7 @@
       stroke: .55pt + edge,
     ),
     (
+      base-color: rgb("#e9b8c5"),
       fill: dots(
         background: rgb("#e9b8c5"),
         color: rgb("#b66d82"),

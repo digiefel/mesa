@@ -4,6 +4,12 @@
 #set page(width: auto, height: auto, margin: 12mm)
 #set text(size: 9pt, font: "Helvetica")
 
+#let sample-light = (
+  azimuth: 5deg,
+  elevation: 60deg,
+  intensity: 0.25,
+)
+
 #let sample = {
   import semi: *
 
@@ -61,6 +67,7 @@
     #align(center)[
       #semi.layer-stack(
         sample,
+        light: sample-light,
       )
     ]
   ],
@@ -73,11 +80,39 @@
           azimuth: 35deg,
           elevation: 35deg,
         ),
-        light: (
-          azimuth: -45deg,
-          elevation: 60deg,
-        ),
+        light: sample-light,
         shading: "flat",
+      )
+    ]
+  ],
+)
+
+#pagebreak()
+
+#grid(
+  columns: 2,
+  gutter: 12mm,
+  align: center,
+  [
+    #align(center)[
+      #semi.layer-stack(
+        sample,
+        light: sample-light,
+        shading: "fancy",
+      )
+    ]
+  ],
+  [
+    #align(center)[
+      #semi.layer-stack(
+        sample,
+        label-transform: "project",
+        camera: (
+          azimuth: 35deg,
+          elevation: 35deg,
+        ),
+        light: sample-light,
+        shading: "fancy",
       )
     ]
   ],
