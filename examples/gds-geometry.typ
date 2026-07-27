@@ -80,21 +80,21 @@
   )
 }
 
-#grid(
-  columns: (9cm, auto),
-  gutter: 10mm,
-  align: center,
-  [#semi.debug.gds(data)],
-  [
-    #canvas(length: .5mm, {
-      draw-shapes(layout.active, rgb("#b8d6ed"))
-      draw-shapes(layout.gate, rgb("#ee867f").transparentize(20%))
-      draw-shapes(layout.metal, rgb("#e9c46a").transparentize(20%))
-    })
-  ],
-)
+// #grid(
+//   columns: (9cm, auto),
+//   gutter: 10mm,
+//   align: center,
+//   [#semi.debug.gds(data)],
+//   [
+//     #canvas(length: .5mm, {
+//       draw-shapes(layout.active, rgb("#b8d6ed"))
+//       draw-shapes(layout.gate, rgb("#ee867f").transparentize(20%))
+//       draw-shapes(layout.metal, rgb("#e9c46a").transparentize(20%))
+//     })
+//   ],
+// )
 
-#pagebreak()
+// #pagebreak()
 
 #let camera = (
   azimuth: 35deg,
@@ -153,79 +153,79 @@
   ),
 )
 
-#pagebreak()
+// #pagebreak()
 
-#let gate-resist = {
-  import semi: *
+// #let gate-resist = {
+//   import semi: *
 
-  oxidized
-  layer(
-    "gate-resist",
-    thickness: 12,
-    material: "resist",
-    mask: mask.invert(layout.gate),
-  )
-}
+//   oxidized
+//   layer(
+//     "gate-resist",
+//     thickness: 12,
+//     material: "resist",
+//     mask: mask.invert(layout.gate),
+//   )
+// }
 
-#let gate-metal = {
-  import semi: *
+// #let gate-metal = {
+//   import semi: *
 
-  gate-resist
-  layer(
-    "gate-metal",
-    thickness: 15,
-    material: "metal",
-    mask: layout.gate,
-  )
-}
+//   gate-resist
+//   layer(
+//     "gate-metal",
+//     thickness: 15,
+//     material: "metal",
+//     mask: layout.gate,
+//   )
+// }
 
-#let contact-resist = {
-  import semi: *
+// #let contact-resist = {
+//   import semi: *
 
-  gated
-  layer(
-    "contact-resist",
-    thickness: 12,
-    material: "resist",
-    mask: mask.invert(layout.metal),
-  )
-}
+//   gated
+//   layer(
+//     "contact-resist",
+//     thickness: 12,
+//     material: "resist",
+//     mask: mask.invert(layout.metal),
+//   )
+// }
 
-#let resist-etched = {
-  import semi: *
+// #let resist-etched = {
+//   import semi: *
 
-  contact-resist
-  etch(depth: 5, mask: layout.metal)
-}
+//   contact-resist
+//   etch(depth: 5, mask: layout.metal)
+// }
 
-#let blanket-metal = {
-  import semi: *
+// #let blanket-metal = {
+//   import semi: *
 
-  resist-etched
-  layer(
-    "contact-metal",
-    thickness: 10,
-    material: "metal",
-  )
-}
+//   resist-etched
+//   layer(
+//     "contact-metal",
+//     thickness: 10,
+//     material: "metal",
+//   )
+// }
 
-#let lifted-off = {
-  import semi: *
+// #let lifted-off = {
+//   import semi: *
 
-  contacted
-}
+//   contacted
+// }
 
-#grid(
-  columns: 4,
-  gutter: 5mm,
-  row-gutter: 5mm,
-  align: center,
-  step([Substrate], substrate, length: .26mm),
-  step([SiO#sub[2]], oxidized, length: .26mm),
-  step([Gate resist], gate-resist, length: .26mm),
-  step([Gate metal], gate-metal, length: .26mm),
-  step([Contact resist], contact-resist, length: .26mm),
-  step([Etch], resist-etched, length: .26mm),
-  step([Blanket metal], blanket-metal, length: .26mm),
-  step([Lift-off], lifted-off, length: .26mm),
-)
+// #grid(
+//   columns: 4,
+//   gutter: 5mm,
+//   row-gutter: 5mm,
+//   align: center,
+//   step([Substrate], substrate, length: .26mm),
+//   step([SiO#sub[2]], oxidized, length: .26mm),
+//   step([Gate resist], gate-resist, length: .26mm),
+//   step([Gate metal], gate-metal, length: .26mm),
+//   step([Contact resist], contact-resist, length: .26mm),
+//   step([Etch], resist-etched, length: .26mm),
+//   step([Blanket metal], blanket-metal, length: .26mm),
+//   step([Lift-off], lifted-off, length: .26mm),
+// )

@@ -1,11 +1,4 @@
-# Mesa
-
-Draw 2D and 3D semiconductor devices and fabrication processes with
-[CeTZ](https://github.com/cetz-package/cetz), including patterned geometry
-loaded from GDS.
-
-```typ
-#import "@preview/mesa:0.1.0" as semi
+#import "../src/lib.typ" as semi
 
 #set page(width: auto, height: auto, margin: 8mm)
 
@@ -37,10 +30,3 @@ loaded from GDS.
   camera: (azimuth: 35deg, elevation: 35deg),
   shading: "fancy",
 )
-```
-
-![A layer stack rendered with Mesa](assets/layer-stack.png)
-
-GDS layouts can also be used to produce process-flow steps.
-
-![A transistor fabrication process rendered with Mesa](assets/process-flow.png)
