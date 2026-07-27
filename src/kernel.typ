@@ -11,10 +11,14 @@
   info
 }
 
-#let gds-layout(data, cell, layers) = {
+#let gds-layout(data, cell, layers, path-tolerance) = {
   let (version, result) = cbor(geometry-kernel.gds_layout(
     data,
-    cbor.encode((cell: cell, layers: layers)),
+    cbor.encode((
+      cell: cell,
+      layers: layers,
+      path-tolerance: path-tolerance * 1.0,
+    )),
   ))
   assert.eq(version, protocol-version)
 
@@ -73,6 +77,15 @@
     version: protocol-version,
     subject: _encode-shapes(subject),
     mask: _encode-shapes(mask),
+  ))))
+  assert.eq(result.version, protocol-version)
+  _decode-shapes(result.shapes)
+}
+
+#let merge(shapes) = {
+  let result = cbor(geometry-kernel.merge(cbor.encode((
+    version: protocol-version,
+    shapes: _encode-shapes(shapes),
   ))))
   assert.eq(result.version, protocol-version)
   _decode-shapes(result.shapes)

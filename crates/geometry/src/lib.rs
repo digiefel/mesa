@@ -31,6 +31,12 @@ struct DifferenceRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct MergeRequest {
+    version: u8,
+    shapes: WireShapes,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct GeometryResponse {
     version: u8,
     shapes: WireShapes,
@@ -162,6 +168,36 @@ pub fn intersection(input: &[u8]) -> Result<Vec<u8>, String> {
     let mask = to_int_shapes(request.mask);
     let mut overlay = Overlay::with_shapes(&subject, &mask);
     let result = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
+
+    encode_response(GeometryResponse {
+        version: PROTOCOL_VERSION,
+        shapes: from_int_shapes(result),
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn merge(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: MergeRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    validate_shapes("merge", &request.shapes)?;
+    let mut result = IntShapes::new();
+    for shape in to_int_shapes(request.shapes) {
+        if result.is_empty() {
+            result.push(shape);
+        } else {
+            let addition = vec![shape];
+            let mut overlay = Overlay::with_shapes(&result, &addition);
+            result = overlay.overlay(OverlayRule::Union, FillRule::EvenOdd);
+        }
+    }
 
     encode_response(GeometryResponse {
         version: PROTOCOL_VERSION,
@@ -584,6 +620,23 @@ mod tests {
         assert_eq!(response.version, PROTOCOL_VERSION);
         assert_eq!(response.shapes.len(), 1);
         assert_eq!(twice_area(&response.shapes).abs(), 36);
+    }
+
+    #[test]
+    fn merges_overlapping_shapes_into_one_region() {
+        let request = MergeRequest {
+            version: PROTOCOL_VERSION,
+            shapes: vec![vec![rectangle(0, 0, 10, 10)], vec![rectangle(5, 0, 15, 10)]],
+        };
+        let mut input = Vec::new();
+        ciborium::into_writer(&request, &mut input).unwrap();
+
+        let encoded = merge(&input).unwrap();
+        let response: GeometryResponse = ciborium::from_reader(encoded.as_slice()).unwrap();
+
+        assert_eq!(response.version, PROTOCOL_VERSION);
+        assert_eq!(response.shapes.len(), 1);
+        assert_eq!(twice_area(&response.shapes).abs(), 300);
     }
 
     #[test]

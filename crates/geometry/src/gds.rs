@@ -14,6 +14,8 @@ const ROUND_CAP_SEGMENTS: usize = 12;
 pub(crate) struct GdsLayoutRequest {
     pub(crate) cell: String,
     pub(crate) layers: BTreeMap<String, [i16; 2]>,
+    #[serde(default, rename = "path-tolerance")]
+    pub(crate) path_tolerance: f64,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -88,6 +90,12 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
             request.cell
         ));
     }
+    if !request.path_tolerance.is_finite() || request.path_tolerance < 0.0 {
+        return Err(format!(
+            "GDS path tolerance must be a finite non-negative number; got {}",
+            request.path_tolerance,
+        ));
+    }
 
     let mut layers = request
         .layers
@@ -95,6 +103,8 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         .map(|name| (name.clone(), GdsShapes::new()))
         .collect::<BTreeMap<_, _>>();
     let mut bounds: Option<[f64; 4]> = None;
+    let nanometers_per_database_unit = library.units.db_unit() / 1e-9;
+    let path_tolerance = request.path_tolerance / nanometers_per_database_unit;
 
     for element in &cell.elems {
         let (layer, datatype) = match element {
@@ -121,7 +131,7 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
                 }
                 vec![vec![contour]]
             }
-            GdsElement::GdsPath(path) => path_to_shapes(path)?,
+            GdsElement::GdsPath(path) => path_to_shapes(path, path_tolerance)?,
             _ => unreachable!("element was checked above"),
         };
 
@@ -138,7 +148,6 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
 
     let [min_x, min_y, max_x, max_y] =
         bounds.ok_or_else(|| "selected GDS layers contain no boundary polygons".to_string())?;
-    let nanometers_per_database_unit = library.units.db_unit() / 1e-9;
     let origin = [
         min_x * nanometers_per_database_unit,
         min_y * nanometers_per_database_unit,
@@ -176,7 +185,7 @@ fn update_bounds(bounds: &mut Option<[f64; 4]>, contour: &GdsContour) {
     }
 }
 
-fn path_to_shapes(path: &gds21::GdsPath) -> Result<GdsShapes, String> {
+fn path_to_shapes(path: &gds21::GdsPath, tolerance: f64) -> Result<GdsShapes, String> {
     let width = path.width.ok_or_else(|| {
         format!(
             "GDS path on layer {}/{} has no width and cannot become an area mask",
@@ -190,7 +199,7 @@ fn path_to_shapes(path: &gds21::GdsPath) -> Result<GdsShapes, String> {
         ));
     }
 
-    let mut points =
+    let points =
         deduplicate_path_points(path.xy.iter().map(|point| [point.x as f64, point.y as f64]));
     if points.len() < 2 {
         return Err(format!(
@@ -198,6 +207,7 @@ fn path_to_shapes(path: &gds21::GdsPath) -> Result<GdsShapes, String> {
             path.layer, path.datatype,
         ));
     }
+    let mut points = simplify_polyline(points, tolerance);
 
     let half_width = width as f64 / 2.0;
     let (start_extension, end_extension, round_ends) = match path.path_type.unwrap_or(0) {
@@ -303,6 +313,58 @@ fn offset_rail(points: &[GdsPoint], distance: f64) -> Result<Vec<GdsPoint>, &'st
         distance,
     ));
     Ok(rail)
+}
+
+fn simplify_polyline(points: Vec<GdsPoint>, tolerance: f64) -> Vec<GdsPoint> {
+    if tolerance <= 0.0 || points.len() <= 2 {
+        return points;
+    }
+    let mut result = Vec::new();
+    simplify_polyline_segment(
+        &points,
+        0,
+        points.len() - 1,
+        tolerance * tolerance,
+        &mut result,
+    );
+    result.push(*points.last().unwrap());
+    result
+}
+
+fn simplify_polyline_segment(
+    points: &[GdsPoint],
+    first: usize,
+    last: usize,
+    tolerance_squared: f64,
+    result: &mut Vec<GdsPoint>,
+) {
+    let mut farthest = None;
+    let mut farthest_distance = tolerance_squared;
+    for index in first + 1..last {
+        let distance =
+            point_to_segment_distance_squared(points[index], points[first], points[last]);
+        if distance > farthest_distance {
+            farthest = Some(index);
+            farthest_distance = distance;
+        }
+    }
+    if let Some(index) = farthest {
+        simplify_polyline_segment(points, first, index, tolerance_squared, result);
+        simplify_polyline_segment(points, index, last, tolerance_squared, result);
+    } else {
+        result.push(points[first]);
+    }
+}
+
+fn point_to_segment_distance_squared(point: GdsPoint, start: GdsPoint, end: GdsPoint) -> f64 {
+    let direction = subtract(end, start);
+    let length_squared = dot(direction, direction);
+    if length_squared == 0.0 {
+        return dot(subtract(point, start), subtract(point, start));
+    }
+    let projection = (dot(subtract(point, start), direction) / length_squared).clamp(0.0, 1.0);
+    let nearest = add(start, scale(direction, projection));
+    dot(subtract(point, nearest), subtract(point, nearest))
 }
 
 fn offset_point(point: GdsPoint, direction: GdsPoint, distance: f64) -> GdsPoint {
@@ -459,6 +521,7 @@ mod tests {
             GdsLayoutRequest {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("active".into(), [1, 0]), ("gate".into(), [10, 2])]),
+                path_tolerance: 0.0,
             },
         )
         .unwrap();
@@ -486,6 +549,7 @@ mod tests {
             GdsLayoutRequest {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("wire".into(), [1, 0])]),
+                path_tolerance: 0.0,
             },
         )
         .unwrap();
@@ -497,7 +561,7 @@ mod tests {
 
     #[test]
     fn offsets_each_side_of_a_bent_path() {
-        let shapes = path_to_shapes(&path(1, 0, 4, &[(0, 0), (10, 0), (10, 10)])).unwrap();
+        let shapes = path_to_shapes(&path(1, 0, 4, &[(0, 0), (10, 0), (10, 10)]), 0.0).unwrap();
 
         assert_eq!(
             shapes,
@@ -515,9 +579,17 @@ mod tests {
     #[test]
     fn keeps_one_offset_vertex_per_centreline_vertex() {
         let points = &[(0, 0), (10, 0), (17, 3), (20, 10), (20, 20)];
-        let shapes = path_to_shapes(&path(1, 0, 4, points)).unwrap();
+        let shapes = path_to_shapes(&path(1, 0, 4, points), 0.0).unwrap();
 
         assert_eq!(shapes[0][0].len(), points.len() * 2);
+    }
+
+    #[test]
+    fn simplifies_the_centreline_with_a_bounded_tolerance() {
+        let path = path(1, 0, 4, &[(0, 0), (5, 1), (10, 0), (15, -1), (20, 0)]);
+
+        assert_eq!(path_to_shapes(&path, 0.0).unwrap()[0][0].len(), 10);
+        assert_eq!(path_to_shapes(&path, 1.5).unwrap()[0][0].len(), 4);
     }
 
     #[test]
@@ -542,6 +614,7 @@ mod tests {
             GdsLayoutRequest {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("wire".into(), [1, 0])]),
+                path_tolerance: 0.0,
             },
         )
         .unwrap();
@@ -552,10 +625,13 @@ mod tests {
 
     #[test]
     fn polygonizes_round_path_ends() {
-        let shapes = path_to_shapes(&GdsPath {
-            path_type: Some(1),
-            ..path(1, 0, 4, &[(0, 0), (10, 0)])
-        })
+        let shapes = path_to_shapes(
+            &GdsPath {
+                path_type: Some(1),
+                ..path(1, 0, 4, &[(0, 0), (10, 0)])
+            },
+            0.0,
+        )
         .unwrap();
 
         assert!(shapes.iter().flatten().map(Vec::len).sum::<usize>() > 4);
@@ -584,6 +660,7 @@ mod tests {
             GdsLayoutRequest {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("active".into(), [1, 0])]),
+                path_tolerance: 0.0,
             },
         )
         .unwrap_err();
