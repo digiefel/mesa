@@ -68,6 +68,15 @@ struct VerticalFaceInterval {
     interior: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VerticalFaceKey {
+    bottom: i64,
+    top: i64,
+    material: u32,
+    normal: Point3,
+    interior: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct LineKey {
     direction: Point3,
@@ -213,6 +222,7 @@ fn add_exposed_vertical_faces(faces: &mut Vec<Face>, volumes: &[WireVolume]) {
 
     for line in lines.values() {
         let coordinates: Vec<i128> = line.points.keys().copied().collect();
+        let mut exposed: BTreeMap<VerticalFaceKey, Vec<(i128, i128)>> = BTreeMap::new();
         for pair in coordinates.windows(2) {
             let start = pair[0];
             let end = pair[1];
@@ -236,20 +246,46 @@ fn add_exposed_vertical_faces(faces: &mut Vec<Face>, volumes: &[WireVolume]) {
                         (other.bottom, other.top)
                     });
                 for (bottom, top) in uncovered_intervals(volume.bottom, volume.top, covered) {
-                    let [x0, y0, _] = line.points[&start];
-                    let [x1, y1, _] = line.points[&end];
-                    faces.push(Face {
-                        normal: interval.normal,
-                        material: volume.material,
-                        interior: interval.interior,
-                        contours: vec![vec![
-                            [x0, y0, bottom],
-                            [x1, y1, bottom],
-                            [x1, y1, top],
-                            [x0, y0, top],
-                        ]],
-                    });
+                    exposed
+                        .entry(VerticalFaceKey {
+                            bottom,
+                            top,
+                            material: volume.material,
+                            normal: interval.normal,
+                            interior: interval.interior,
+                        })
+                        .or_default()
+                        .push((start, end));
                 }
+            }
+        }
+
+        for (key, mut spans) in exposed {
+            spans.sort_unstable();
+            let mut merged: Vec<(i128, i128)> = Vec::new();
+            for (start, end) in spans {
+                if let Some(last) = merged.last_mut()
+                    && last.1 == start
+                {
+                    last.1 = end;
+                } else {
+                    merged.push((start, end));
+                }
+            }
+            for (start, end) in merged {
+                let [x0, y0, _] = line.points[&start];
+                let [x1, y1, _] = line.points[&end];
+                faces.push(Face {
+                    normal: key.normal,
+                    material: key.material,
+                    interior: key.interior,
+                    contours: vec![vec![
+                        [x0, y0, key.bottom],
+                        [x1, y1, key.bottom],
+                        [x1, y1, key.top],
+                        [x0, y0, key.top],
+                    ]],
+                });
             }
         }
     }
@@ -609,6 +645,37 @@ mod tests {
             .filter(|face| face.material == 2 && face.normal[2] == 0)
             .flat_map(|face| face.contours.iter().flatten())
             .all(|point| point[2] >= 45));
+    }
+
+    #[test]
+    fn does_not_split_a_continuous_face_at_an_upper_layer_endpoint() {
+        let bounds = vec![vec![rectangle(0, 0, 10, 6)]];
+        let upper = vec![vec![rectangle(4, 0, 6, 6)]];
+        let volumes = vec![
+            WireVolume {
+                shapes: bounds,
+                bottom: 0,
+                top: 40,
+                material: 0,
+            },
+            WireVolume {
+                shapes: upper,
+                bottom: 40,
+                top: 50,
+                material: 1,
+            },
+        ];
+
+        let faces = scene_faces(&volumes);
+        let substrate_front: Vec<&Face> = faces
+            .iter()
+            .filter(|face| face.material == 0 && face.normal == [0, -10, 0])
+            .collect();
+        assert_eq!(substrate_front.len(), 1);
+        assert_eq!(
+            substrate_front[0].contours,
+            vec![vec![[0, 0, 0], [10, 0, 0], [10, 0, 40], [0, 0, 40]]]
+        );
     }
 
     fn edge_kind(edges: &[AtomicEdge], start: Point3, end: Point3) -> Option<EdgeKind> {

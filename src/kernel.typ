@@ -137,18 +137,18 @@
   ))
 }
 
-#let scene-surfaces(volumes) = {
+#let scene-surfaces(volumes, view) = {
   let result = cbor(geometry-kernel.scene_surfaces(cbor.encode((
     version: protocol-version,
     volumes: volumes.enumerate().map(
       ((index, volume)) => _encode-volume(volume, index),
     ),
+    view: view,
   ))))
   assert.eq(result.version, protocol-version)
   result.faces.map(face => (
     normal: face.normal,
     material: face.material,
-    interior: face.interior,
     contours: face.contours.map(
       contour => contour.map(_decode-point),
     ),

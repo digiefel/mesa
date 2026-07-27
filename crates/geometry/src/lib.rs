@@ -83,12 +83,13 @@ struct SceneTopologyResponse {
 struct SceneSurfacesRequest {
     version: u8,
     volumes: Vec<topology::WireVolume>,
+    view: visibility::ViewMatrix,
 }
 
 #[derive(Debug, Serialize)]
 struct SceneSurfacesResponse {
     version: u8,
-    faces: Vec<topology::Face>,
+    faces: Vec<visibility::WireSurface>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
@@ -283,7 +284,8 @@ pub fn scene_surfaces(input: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     topology::validate_volumes(&request.volumes)?;
-    let faces = topology::scene_faces(&request.volumes);
+    visibility::validate_view(request.view)?;
+    let faces = visibility::scene_surfaces(&request.volumes, request.view);
     let mut output = Vec::new();
     ciborium::into_writer(
         &SceneSurfacesResponse {

@@ -917,6 +917,54 @@
   })
 }
 
+#let etch(depth: none, mask: auto) = {
+  assert(
+    type(depth) in (int, float) and depth > 0,
+    message: "etch depth must be a positive number",
+  )
+  assert(
+    mask == auto or type(mask) in (array, dictionary),
+    message: "etch mask must be polygon geometry, mask.invert geometry, or auto",
+  )
+  if type(mask) == dictionary {
+    assert(
+      mask.at("operation", default: none) == "invert"
+        and type(mask.at("shapes", default: none)) == array,
+      message: "etch mask dictionary must be created with mask.invert",
+    )
+  }
+
+  cetz.draw.set-ctx(ctx => {
+    let state = ctx.shared-state.at("semi", default: none)
+    assert(
+      state != none,
+      message: "etch must be used inside layer-stack",
+    )
+    let (width, depth-extent) = state.size
+    let bounds = (
+      (
+        ((0, 0), (width, 0), (width, depth-extent), (0, depth-extent)),
+      ),
+    )
+    let footprint = if mask == auto {
+      bounds
+    } else if type(mask) == dictionary {
+      _kernel.difference(bounds, mask.shapes)
+    } else {
+      mask
+    }
+    state.volumes = _scene.etch(state.volumes, footprint, depth)
+    state.height = if state.volumes.len() == 0 {
+      0
+    } else {
+      calc.max(..state.volumes.map(volume => volume.top))
+    }
+    state.masked = true
+    ctx.shared-state.semi = state
+    ctx
+  })
+}
+
 #let layer(
   name,
   thickness: none,

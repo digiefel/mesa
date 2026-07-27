@@ -49,12 +49,57 @@
   result
 }
 
-#let _render-faces(volumes) = {
+#let etch(volumes, shapes, depth) = {
+  let rays = ((shapes: shapes, remaining: depth),)
+  let result = ()
+
+  for volume in volumes.sorted(key: volume => -volume.top) {
+    let untouched = volume.shapes
+    let next-rays = ()
+    let thickness = volume.top - volume.bottom
+
+    for ray in rays {
+      let overlap = kernel.intersection(ray.shapes, volume.shapes)
+      let bypass = kernel.difference(ray.shapes, volume.shapes)
+      if bypass.len() > 0 {
+        next-rays.push((
+          shapes: bypass,
+          remaining: ray.remaining,
+        ))
+      }
+      if overlap.len() > 0 {
+        untouched = kernel.difference(untouched, overlap)
+        if ray.remaining < thickness {
+          let etched = volume
+          etched.shapes = overlap
+          etched.top = volume.top - ray.remaining
+          result.push(etched)
+        } else if ray.remaining > thickness {
+          next-rays.push((
+            shapes: overlap,
+            remaining: ray.remaining - thickness,
+          ))
+        }
+      }
+    }
+
+    if untouched.len() > 0 {
+      let kept = volume
+      kept.shapes = untouched
+      result.push(kept)
+    }
+    rays = next-rays
+  }
+
+  result
+}
+
+#let _render-faces(volumes, view) = {
   for (index, volume) in volumes.enumerate() {
     _validate-volume(volume, index)
   }
 
-  for face in kernel.scene-surfaces(volumes) {
+  for face in kernel.scene-surfaces(volumes, view) {
     if face.normal.at(2) >= 0 {
       let volume = volumes.at(face.material)
       let fill = if face.normal.at(2) > 0 {
@@ -106,7 +151,7 @@
 
 #let render(volumes, view: none, styles: edge-styles) = {
   assert(view != none, message: "3D scene rendering requires a view")
-  _render-faces(volumes)
+  _render-faces(volumes, view)
   _render-edges(volumes, view, styles)
 }
 
@@ -203,7 +248,7 @@
     debug-volume.side-fill = debug-fill
     debug-volume
   })
-  _render-faces(debug-volumes)
+  _render-faces(debug-volumes, view)
 
   draw.on-layer(100, {
     for edge in kernel.scene-topology(volumes, view) {

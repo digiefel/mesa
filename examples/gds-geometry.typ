@@ -26,7 +26,7 @@
   }
 }
 
-#let etched-oxide = {
+#let substrate = {
   import semi: *
 
   layer(
@@ -34,37 +34,44 @@
     thickness: 40,
     material: "substrate",
     label: [Si],
-  )
-  layer(
-    "oxide",
-    thickness: 5,
-    material: "dielectric",
-    mask: mask.invert(layout.metal),
   )
 }
 
-#let transistor = {
+#let oxidized = {
   import semi: *
 
-  layer(
-    "substrate",
-    thickness: 40,
-    material: "substrate",
-    label: [Si],
-  )
+  substrate
+
   layer(
     "oxide",
     thickness: 5,
     material: "dielectric",
-    label: [SiO#sub[2]],
-    mask: mask.invert(layout.metal),
   )
+}
+
+#let gated = {
+  import semi: *
+
+  oxidized
   layer(
     "gate",
     thickness: 15,
     material: "metal",
     mask: layout.gate,
   )
+}
+
+#let etched = {
+  import semi: *
+
+  gated
+  etch(depth: 5, mask: layout.metal)
+}
+
+#let contacted = {
+  import semi: *
+
+  etched
   layer(
     "metal",
     thickness: 10,
@@ -102,36 +109,38 @@
 
 #let section-y = layout.size.at(1) / 2
 
+#let step(name, body, section: none) = [
+  #stack(
+    dir: ttb,
+    spacing: 1.5mm,
+    align(center)[
+      #semi.layer-stack(
+        body,
+        size: layout.size,
+        camera: camera,
+        shading: "fancy",
+        light: light,
+        section: section,
+        length: .35mm,
+      )
+    ],
+    align(center)[#text(8pt, weight: "medium", name)],
+  )
+]
+
 #grid(
   columns: 3,
-  gutter: 12mm,
+  gutter: 8mm,
+  row-gutter: 7mm,
   align: center,
-  [
-    #semi.layer-stack(
-      etched-oxide,
-      size: layout.size,
-      camera: camera,
-      shading: "fancy",
-      light: light,
-      length: .5mm,
-    )
-  ],
-  [
-    #semi.layer-stack(
-      transistor,
-      size: layout.size,
-      camera: camera,
-      shading: "fancy",
-      light: light,
-      length: .5mm,
-    )
-  ],
-  [
-    #semi.layer-stack(
-      transistor,
-      size: layout.size,
-      section: ((0, section-y), (layout.size.at(0), section-y)),
-      length: .5mm,
-    )
-  ],
+  step([Substrate], substrate),
+  step([SiO#sub[2]], oxidized),
+  step([Gate], gated),
+  step([Etch], etched),
+  step([Metal contacts], contacted),
+  step(
+    [Cross section],
+    contacted,
+    section: ((0, section-y), (layout.size.at(0), section-y)),
+  ),
 )
