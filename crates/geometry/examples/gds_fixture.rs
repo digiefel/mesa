@@ -16,21 +16,33 @@ fn main() {
         .nth(1)
         .expect("usage: cargo run --example gds_fixture -- OUTPUT.gds");
 
-    let mut library = GdsLibrary::new("semi-example");
+    let mut library = GdsLibrary::new("planar-mosfet");
     let mut top = GdsStruct::new("TOP");
-    top.elems
-        .push(boundary(1, &[(0, 0), (100, 0), (100, 60), (0, 60), (0, 0)]).into());
+    top.elems.push(
+        boundary(
+            1,
+            &[(0, 25), (120, 25), (120, 75), (0, 75), (0, 25)],
+        )
+        .into(),
+    );
     top.elems.push(
         boundary(
             10,
-            &[(20, 10), (80, 10), (80, 50), (20, 50), (20, 10)],
+            &[(55, 0), (65, 0), (65, 100), (55, 100), (55, 0)],
         )
         .into(),
     );
     top.elems.push(
         boundary(
             20,
-            &[(45, 0), (55, 0), (55, 60), (45, 60), (45, 0)],
+            &[(15, 35), (45, 35), (45, 65), (15, 65), (15, 35)],
+        )
+        .into(),
+    );
+    top.elems.push(
+        boundary(
+            20,
+            &[(75, 35), (105, 35), (105, 65), (75, 65), (75, 35)],
         )
         .into(),
     );

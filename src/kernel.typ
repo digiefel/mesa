@@ -11,6 +11,23 @@
   info
 }
 
+#let gds-layout(data, cell, layers) = {
+  let (version, result) = cbor(geometry-kernel.gds_layout(
+    data,
+    cbor.encode((cell: cell, layers: layers)),
+  ))
+  assert.eq(version, protocol-version)
+
+  let layout = (
+    origin: result.origin,
+    size: result.size,
+  )
+  for (name, shapes) in result.layers {
+    layout.insert(name, shapes)
+  }
+  layout
+}
+
 #let _encode-point(point) = point.map(
   component => int(calc.round(component * grid-scale)),
 )

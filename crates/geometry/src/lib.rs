@@ -94,6 +94,17 @@ pub fn gds_info(input: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn gds_layout(data: &[u8], input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: gds::GdsLayoutRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+    let layout = gds::extract(data, request)?;
+    let mut output = Vec::new();
+    ciborium::into_writer(&(PROTOCOL_VERSION, layout), &mut output)
+        .map_err(|error| format!("could not encode GDS layout: {error}"))?;
+    Ok(output)
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
 pub fn difference(input: &[u8]) -> Result<Vec<u8>, String> {
     let request: DifferenceRequest =
         ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
