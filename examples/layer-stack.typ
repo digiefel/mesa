@@ -1,13 +1,12 @@
 #import "../src/lib.typ" as semi
-#import "@preview/cetz:0.5.2": draw
 
 #set page(width: auto, height: auto, margin: 12mm)
 #set text(size: 9pt, font: "Helvetica")
 
 #let sample-light = (
   azimuth: 15deg,
-  elevation: 55deg,
-  intensity: 0.25,
+  elevation: 50deg,
+  intensity: 0.35,
 )
 
 #let sample = {
@@ -41,10 +40,10 @@
     thickness: 20,
     material: "resist",
   )
-  face-content(
-    "resist",
+  draw.content(
+    "resist.front",
     [Photoresist],
-    position: (center, horizon),
+    project: "resist.front",
   )
 
   // an annotation
@@ -53,10 +52,15 @@
     (rel: (1.5, 0), to: "metal.back-right-bottom"),
     (rel: (1.5, 0), to: "metal.back-right-top"),
     name: "metal-t",
-    mark: (start: "|", end: "|"),
+    mark: (start: "|", end: "|", transform-shape: true),
     stroke: .55pt,
   )
-  draw.content("metal-t.mid", text(7pt)[15 nm], anchor: "west")
+  draw.content(
+    "metal-t.mid",
+    text(7pt)[15 nm],
+    project: "metal.back",
+    anchor: "west",
+  )
 }
 
 #grid(

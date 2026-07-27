@@ -8,6 +8,69 @@
   (0, 0, 0, 1),
 )
 
+#let _inverse-transform-point(matrix, point) = {
+  let ((a, b, c, tx), (d, e, f, ty), (g, h, i, tz), _) = matrix
+  let determinant = (
+    a * (e * i - f * h)
+      - b * (d * i - f * g)
+      + c * (d * h - e * g)
+  )
+  assert(
+    calc.abs(determinant) > 1e-12,
+    message: "cannot resolve coordinates through a singular transform",
+  )
+  let (x, y, z) = (
+    point.at(0) - tx,
+    point.at(1) - ty,
+    point.at(2) - tz,
+  )
+  (
+    (
+      (e * i - f * h) * x
+        + (c * h - b * i) * y
+        + (b * f - c * e) * z
+    ) / determinant,
+    (
+      (f * g - d * i) * x
+        + (a * i - c * g) * y
+        + (c * d - a * f) * z
+    ) / determinant,
+    (
+      (d * h - e * g) * x
+        + (b * g - a * h) * y
+        + (a * e - b * d) * z
+    ) / determinant,
+  )
+}
+
+#let _resolve-known-anchor(ctx, coordinate) = {
+  // CeTZ 0.5.2's generic matrix inverse can select more than one pivot per
+  // column. Resolve named nodes through the affine inverse above so anchors
+  // remain continuous as the camera rotates.
+  let target = if type(coordinate) == str {
+    let parts = coordinate.split(".")
+    (
+      name: parts.first(),
+      anchor: if parts.len() == 1 { "default" } else { parts.slice(1) },
+    )
+  } else if type(coordinate) == dictionary and "name" in coordinate {
+    (
+      name: coordinate.name,
+      anchor: coordinate.at("anchor", default: "default"),
+    )
+  } else {
+    none
+  }
+  if target == none or target.name not in ctx.nodes {
+    return coordinate
+  }
+
+  _inverse-transform-point(
+    ctx.transform,
+    (ctx.nodes.at(target.name).anchors)(target.anchor),
+  )
+}
+
 #let _merge-dictionaries(base, overrides) = {
   let merged = base
   for (key, value) in overrides {
@@ -383,47 +446,123 @@
   )
 }
 
-#let _face-horizontal(camera, face) = {
+#let _face-basis(camera, face) = {
   let azimuth = camera.at("azimuth", default: 0deg)
   let elevation = camera.at("elevation", default: 0deg)
   if face in ("front", "back") {
     (
-      calc.cos(azimuth),
-      calc.sin(elevation) * calc.sin(azimuth),
+      (
+        calc.cos(azimuth),
+        calc.sin(elevation) * calc.sin(azimuth),
+      ),
+      (0, calc.cos(elevation)),
     )
   } else if face == "right" {
     (
-      calc.sin(azimuth),
-      -calc.sin(elevation) * calc.cos(azimuth),
+      (
+        calc.sin(azimuth),
+        -calc.sin(elevation) * calc.cos(azimuth),
+      ),
+      (0, calc.cos(elevation)),
+    )
+  } else if face == "left" {
+    (
+      (
+        -calc.sin(azimuth),
+        calc.sin(elevation) * calc.cos(azimuth),
+      ),
+      (0, calc.cos(elevation)),
     )
   } else {
     (
-      -calc.sin(azimuth),
-      calc.sin(elevation) * calc.cos(azimuth),
+      (
+        calc.cos(azimuth),
+        calc.sin(elevation) * calc.sin(azimuth),
+      ),
+      (
+        -calc.sin(azimuth),
+        calc.sin(elevation) * calc.cos(azimuth),
+      ),
     )
   }
 }
 
-#let project-face-content(body, camera, face) = {
-  let elevation = camera.at("elevation", default: 0deg)
-  let (horizontal-x, horizontal-y) = _face-horizontal(camera, face)
-  let vertical-y = calc.cos(elevation)
-  let shear = calc.atan2(horizontal-x, horizontal-y)
+#let _face-horizontal(camera, face) = _face-basis(camera, face).first()
 
-  std.skew(
-    ay: shear,
-    origin: center + horizon,
-    std.scale(
-      x: horizontal-x * 100%,
-      y: vertical-y * 100%,
-      origin: center + horizon,
-      body,
+#let _content-origin(anchor) = {
+  let anchor = if anchor == none { "center" } else { anchor }
+  if anchor == "north-west" {
+    left + top
+  } else if anchor == "north" {
+    center + top
+  } else if anchor == "north-east" {
+    right + top
+  } else if anchor in ("west", "mid-west") {
+    left + horizon
+  } else if anchor in ("center", "mid") {
+    center + horizon
+  } else if anchor in ("east", "mid-east") {
+    right + horizon
+  } else if anchor in ("south-west", "base-west", "text") {
+    left + bottom
+  } else if anchor in ("south", "base") {
+    center + bottom
+  } else if anchor in ("south-east", "base-east") {
+    right + bottom
+  } else {
+    panic("unsupported anchor for projected content: " + repr(anchor))
+  }
+}
+
+#let project-face-content(
+  body,
+  camera,
+  face,
+  anchor: none,
+) = {
+  assert(
+    face in ("front", "back", "left", "right", "top", "bottom"),
+    message: "unknown projection face: " + repr(face),
+  )
+
+  let (u, v) = _face-basis(camera, face)
+  let origin = _content-origin(anchor)
+  let v-length = calc.sqrt(v.at(0) * v.at(0) + v.at(1) * v.at(1))
+  if v-length < 1e-8 {
+    return std.scale(x: 0%, y: 0%, body)
+  }
+
+  let v-unit = (v.at(0) / v-length, v.at(1) / v-length)
+  let x-unit = (v-unit.at(1), -v-unit.at(0))
+  let x-scale = u.at(0) * x-unit.at(0) + u.at(1) * x-unit.at(1)
+  if calc.abs(x-scale) < 1e-8 {
+    return std.scale(x: 0%, y: 0%, body)
+  }
+
+  let shear = (
+    u.at(0) * v-unit.at(0) + u.at(1) * v-unit.at(1)
+  ) / x-scale
+  let rotation = calc.atan2(x-unit.at(0), x-unit.at(1))
+
+  std.rotate(
+    rotation,
+    origin: origin,
+    std.skew(
+      ay: calc.atan2(1, shear),
+      origin: origin,
+      std.scale(
+        x: x-scale * 100%,
+        y: v-length * 100%,
+        origin: origin,
+        body,
+      ),
     ),
   )
 }
 
 #let _face-content-angle(camera, face) = {
-  let (horizontal-x, horizontal-y) = _face-horizontal(camera, face)
+  let (horizontal, _) = _face-basis(camera, face)
+  let (horizontal-x, horizontal-y) = horizontal
   calc.atan2(horizontal-x, horizontal-y)
 }
 
@@ -1465,44 +1604,6 @@
   })
 }
 
-#let face-content(
-  target,
-  body,
-  face: auto,
-  transform: "project",
-  anchor: "center",
-  position: (center, horizon),
-) = {
-  assert(type(target) == str, message: "face-content target must be a string")
-  assert(
-    face == auto or face in ("front", "back", "left", "right"),
-    message: "face must be auto, \"front\", \"back\", \"left\", or \"right\"",
-  )
-  assert(
-    transform in ("none", "rotate", "project"),
-    message: "transform must be \"none\", \"rotate\", or \"project\"",
-  )
-  assert(type(anchor) == str, message: "anchor must be a string")
-  _validate-position(position)
-
-  cetz.draw.set-ctx(ctx => {
-    let state = ctx.shared-state.at("semi", default: none)
-    assert(
-      state != none,
-      message: "face-content must be used inside layer-stack",
-    )
-    ctx.shared-state.semi.face-contents.push((
-      target: target,
-      body: body,
-      face: face,
-      transform: transform,
-      anchor: anchor,
-      position: position,
-    ))
-    ctx
-  })
-}
-
 #let layer-stack(
   body,
   size: (80, 50),
@@ -1588,6 +1689,7 @@
         cull-face: none,
         {
           cetz.draw.transform(_device-to-cetz)
+          cetz.draw.register-coordinate-resolver(_resolve-known-anchor)
           body
           _draw-scene()
           if debug != none {

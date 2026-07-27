@@ -112,37 +112,60 @@ layer("metal-3", thickness: 0.3, material: "metal", variant: 1)
 The first two layers use successive metal variants. The third explicitly uses
 variant 1. It still advances the metal occurrence counter.
 
-### `face-content`
+### Layer anchors and projected content
 
 ```typ
-face-content(
-  target,
+draw.content(
+  position,
   body,
-  face: auto,
-  transform: "project",
-  anchor: "center",
-  position: (center, horizon),
+  project: none,
+  anchor: none,
 )
 ```
 
-Places arbitrary Typst content on a layer face. `target` is the layer name.
-`face: auto` selects the visible front or back face; `"front"`, `"back"`,
-`"left"`, and `"right"` select a vertical face explicitly. `transform` accepts
-`"project"`, `"rotate"`, or `"none"`. `position` uses face-local horizontal and
-vertical coordinates.
+The package exports `draw`, a facade over CeTZ's `draw` module. Its functions
+are unchanged except where this package explicitly adds semiconductor-aware
+behavior.
+
+Every named layer exposes CeTZ anchors for its faces, edges, and corners:
 
 ```typ
-face-content(
-  "resist",
+"metal.front"
+"metal.top"
+"metal.back-right"
+"metal.back-right-bottom"
+```
+
+These are ordinary CeTZ coordinates. They work anywhere a CeTZ coordinate is
+accepted.
+
+The package's `draw.content` adds one named argument, `project`. It must name
+one of the six central face anchors: `front`, `back`, `left`, `right`, `top`,
+or `bottom`. Placement remains independent and is still handled entirely by
+CeTZ.
+
+```typ
+draw.content(
+  "resist.front",
   [Photoresist],
-  position: (center, horizon),
+  project: "resist.front",
+)
+
+draw.content(
+  "metal-t.mid",
+  text(7pt)[15 nm],
+  project: "metal.back",
+  anchor: "west",
 )
 ```
 
-Layer labels use the same placement and transformation pipeline.
+In the second call, `"metal-t.mid"` is only the midpoint of a named CeTZ line.
+It carries no projection metadata. `"metal.back"` independently supplies the
+projection plane.
 
-Position components can be alignments, numbers in model units, lengths, ratios,
-or relative lengths:
+Layer labels use the same projection implementation. Their `label-position`
+components can be alignments, numbers in model units, lengths, ratios, or
+relative lengths:
 
 ```typ
 label-position: (center, horizon)
