@@ -19,9 +19,11 @@ pub(crate) struct GdsLayoutRequest {
 }
 
 #[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) struct GdsLayout {
     pub(crate) origin: GdsPoint,
     pub(crate) size: GdsPoint,
+    pub(crate) unit_meters: f64,
     pub(crate) layers: BTreeMap<String, GdsShapes>,
 }
 
@@ -59,12 +61,11 @@ pub(crate) fn inspect(bytes: &[u8]) -> Result<GdsInfo, String> {
         .into_iter()
         .collect();
 
+    let user_unit_meters = user_unit_meters(&library);
     Ok(GdsInfo {
         library: library.name,
         db_unit_meters: library.units.db_unit(),
-        // gds21 0.2.0 returns user-units per metre here, despite the method name
-        // and documentation. Invert it to recover the user-unit size in metres.
-        user_unit_meters: 1.0 / library.units.user_unit(),
+        user_unit_meters,
         cells,
         layers,
     })
@@ -105,7 +106,8 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         .map(|name| (name.clone(), GdsShapes::new()))
         .collect::<BTreeMap<_, _>>();
     let mut bounds: Option<[f64; 4]> = None;
-    let nanometers_per_database_unit = library.units.db_unit() / 1e-9;
+    let unit_meters = user_unit_meters(&library);
+    let user_units_per_database_unit = library.units.db_unit() / unit_meters;
 
     for element in &cell.elems {
         let (layer, datatype) = match element {
@@ -150,16 +152,16 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
     let [min_x, min_y, max_x, max_y] =
         bounds.ok_or_else(|| "selected GDS layers contain no boundary polygons".to_string())?;
     let origin = [
-        min_x * nanometers_per_database_unit,
-        min_y * nanometers_per_database_unit,
+        min_x * user_units_per_database_unit,
+        min_y * user_units_per_database_unit,
     ];
 
     for shapes in layers.values_mut() {
         for shape in shapes {
             for contour in shape {
                 for point in contour {
-                    point[0] = point[0] * nanometers_per_database_unit - origin[0];
-                    point[1] = point[1] * nanometers_per_database_unit - origin[1];
+                    point[0] = point[0] * user_units_per_database_unit - origin[0];
+                    point[1] = point[1] * user_units_per_database_unit - origin[1];
                 }
             }
         }
@@ -168,11 +170,18 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
     Ok(GdsLayout {
         origin,
         size: [
-            (max_x - min_x) * nanometers_per_database_unit,
-            (max_y - min_y) * nanometers_per_database_unit,
+            (max_x - min_x) * user_units_per_database_unit,
+            (max_y - min_y) * user_units_per_database_unit,
         ],
+        unit_meters,
         layers,
     })
+}
+
+fn user_unit_meters(library: &GdsLibrary) -> f64 {
+    // gds21 0.2.0 returns user-units per metre here, despite the method name
+    // and documentation. Invert it to recover the user-unit size in metres.
+    1.0 / library.units.user_unit()
 }
 
 fn update_bounds(bounds: &mut Option<[f64; 4]>, contour: &GdsContour) {
@@ -461,6 +470,15 @@ mod tests {
         bounds.unwrap()
     }
 
+    fn assert_point_close(actual: GdsPoint, expected: GdsPoint) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "expected {expected}, got {actual}",
+            );
+        }
+    }
+
     #[test]
     fn reads_library_cells_units_and_boundary_layers_from_bytes() {
         let mut library = GdsLibrary::new("semi-example");
@@ -497,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_named_boundary_layers_in_nanometers() {
+    fn extracts_named_boundary_layers_in_gds_user_units() {
         let mut library = GdsLibrary::new("semi-example");
         let mut top = GdsStruct::new("TOP");
         top.elems.push(
@@ -530,12 +548,17 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(layout.origin, [100.0, 200.0]);
-        assert_eq!(layout.size, [10.0, 6.0]);
-        assert_eq!(
-            layout.layers["gate"],
-            vec![vec![vec![[2.0, 1.0], [8.0, 1.0], [8.0, 5.0], [2.0, 5.0],]]]
-        );
+        assert_eq!(layout.unit_meters, 1e-6);
+        assert_eq!(layout.origin, [0.1, 0.2]);
+        assert_eq!(layout.size, [0.01, 0.006]);
+        for (actual, expected) in layout.layers["gate"][0][0].iter().zip([
+            [0.002, 0.001],
+            [0.008, 0.001],
+            [0.008, 0.005],
+            [0.002, 0.005],
+        ]) {
+            assert_point_close(*actual, expected);
+        }
     }
 
     #[test]
@@ -558,9 +581,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(layout.origin, [100.0, 198.0]);
-        assert_eq!(layout.size, [20.0, 4.0]);
-        assert_eq!(shape_bounds(&layout.layers["wire"]), [0.0, 0.0, 20.0, 4.0]);
+        assert_eq!(layout.unit_meters, 1e-6);
+        assert_eq!(layout.origin, [0.1, 0.198]);
+        assert_eq!(layout.size, [0.02, 0.004]);
+        let [min_x, min_y, max_x, max_y] = shape_bounds(&layout.layers["wire"]);
+        assert_point_close([min_x, min_y], [0.0, 0.0]);
+        assert_point_close([max_x, max_y], [0.02, 0.004]);
     }
 
     #[test]
@@ -639,8 +665,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(layout.origin, [97.0, 198.0]);
-        assert_eq!(layout.size, [28.0, 4.0]);
+        assert_eq!(layout.origin, [0.097, 0.198]);
+        assert_eq!(layout.size, [0.028, 0.004]);
     }
 
     #[test]

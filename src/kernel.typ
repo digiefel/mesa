@@ -25,6 +25,7 @@
   let layout = (
     origin: result.origin,
     size: result.size,
+    unit-meters: result.unit-meters,
   )
   for (name, shapes) in result.layers {
     layout.insert(name, shapes)

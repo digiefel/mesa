@@ -2,6 +2,10 @@
 
 /// Read boundary polygons and width-aware paths from a named GDS cell.
 ///
+/// Coordinates are returned in the user unit declared by the GDS library.
+/// The corresponding physical scale in metres is available as
+/// `layout.unit-meters`.
+///
 /// `path-tolerance` optionally simplifies the path centreline by a fraction of
 /// that path's width before generating its two offset rails. For example, `2%`
 /// limits the centreline deviation to two percent of the path width. Zero

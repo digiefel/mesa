@@ -1,6 +1,6 @@
 use std::{env, fs::File};
 
-use gds21::{GdsBoundary, GdsLibrary, GdsPoint, GdsStruct};
+use gds21::{GdsBoundary, GdsLibrary, GdsPoint, GdsStruct, GdsUnits};
 
 fn boundary(layer: i16, points: &[(i32, i32)]) -> GdsBoundary {
     GdsBoundary {
@@ -17,6 +17,8 @@ fn main() {
         .expect("usage: cargo run --example gds_fixture -- OUTPUT.gds");
 
     let mut library = GdsLibrary::new("planar-mosfet");
+    // This fixture's coordinates and layer thicknesses are expressed in nm.
+    library.units = GdsUnits::new(1.0, 1e-9);
     let mut top = GdsStruct::new("TOP");
     top.elems.push(
         boundary(
