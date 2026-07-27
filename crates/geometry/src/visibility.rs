@@ -92,7 +92,10 @@ pub(crate) fn scene_edges(
 }
 
 pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<WireSurface> {
-    let faces = crate::topology::scene_faces(volumes);
+    let faces = crate::topology::scene_faces(volumes)
+        .into_iter()
+        .filter(|face| face.normal[2] >= 0)
+        .collect::<Vec<_>>();
     let projected: Vec<ProjectedFace> = faces
         .iter()
         .map(|face| ProjectedFace::new(face, view))
@@ -104,23 +107,29 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
     let mut result = Vec::new();
 
     for (index, face) in faces.iter().enumerate() {
-        let mut visible = projected_shapes[index].clone();
+        let mut occluders = Vec::new();
         for (other_index, other) in projected.iter().enumerate() {
-            if index == other_index || visible.is_empty() {
+            if index == other_index
+                || !projected[index].bounds_overlap(other)
+            {
                 continue;
             }
-            let mut overlay =
-                Overlay::with_shapes(&visible, &projected_shapes[other_index]);
-            let overlap = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
-            if overlap.is_empty() {
-                continue;
-            }
-            let occluded = nearer_overlap(other, &projected[index], &overlap);
+            let occluded = nearer_projected_region(
+                other,
+                &projected[index],
+                &projected_shapes[other_index],
+            );
             if !occluded.is_empty() {
-                let mut overlay = Overlay::with_shapes(&visible, &occluded);
-                visible = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+                occluders.push(occluded);
             }
         }
+        let occluded = union_regions(occluders);
+        let visible = if occluded.is_empty() {
+            projected_shapes[index].clone()
+        } else {
+            let mut overlay = Overlay::with_shapes(&projected_shapes[index], &occluded);
+            overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd)
+        };
 
         for shape in visible {
             let depth = shape
@@ -165,6 +174,61 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
     }
     result.sort_by(|left, right| left.0.total_cmp(&right.0));
     result.into_iter().map(|(_, surface)| surface).collect()
+}
+
+fn nearer_projected_region(
+    candidate: &ProjectedFace,
+    surface: &ProjectedFace,
+    candidate_shape: &IntShapes<i64>,
+) -> IntShapes<i64> {
+    let (Some(candidate_depth), Some(surface_depth)) =
+        (candidate.depth_coefficients(), surface.depth_coefficients())
+    else {
+        return Vec::new();
+    };
+    let coefficients = [
+        candidate_depth[0] - surface_depth[0],
+        candidate_depth[1] - surface_depth[1],
+        candidate_depth[2] - surface_depth[2],
+    ];
+    let low = [
+        candidate.low[0].max(surface.low[0]),
+        candidate.low[1].max(surface.low[1]),
+    ];
+    let high = [
+        candidate.high[0].min(surface.high[0]),
+        candidate.high[1].min(surface.high[1]),
+    ];
+    let depths = [
+        coefficients[0] * low[0] + coefficients[1] * low[1] + coefficients[2],
+        coefficients[0] * low[0] + coefficients[1] * high[1] + coefficients[2],
+        coefficients[0] * high[0] + coefficients[1] * low[1] + coefficients[2],
+        coefficients[0] * high[0] + coefficients[1] * high[1] + coefficients[2],
+    ];
+    if depths.iter().all(|depth| *depth <= EPSILON) {
+        Vec::new()
+    } else if depths.iter().all(|depth| *depth > EPSILON) {
+        candidate_shape.clone()
+    } else {
+        nearer_overlap(candidate, surface, candidate_shape)
+    }
+}
+
+fn union_regions(mut regions: Vec<IntShapes<i64>>) -> IntShapes<i64> {
+    while regions.len() > 1 {
+        let mut merged = Vec::with_capacity(regions.len().div_ceil(2));
+        let mut iterator = regions.into_iter();
+        while let Some(first) = iterator.next() {
+            if let Some(second) = iterator.next() {
+                let mut overlay = Overlay::with_shapes(&first, &second);
+                merged.push(overlay.overlay(OverlayRule::Union, FillRule::EvenOdd));
+            } else {
+                merged.push(first);
+            }
+        }
+        regions = merged;
+    }
+    regions.pop().unwrap_or_default()
 }
 
 fn projected_to_int_shapes(contours: &[Vec<Point2>]) -> IntShapes<i64> {
@@ -317,6 +381,13 @@ impl ProjectedFace {
             -self.normal[1] / self.normal[2],
             self.constant / self.normal[2],
         ])
+    }
+
+    fn bounds_overlap(&self, other: &Self) -> bool {
+        self.low[0] <= other.high[0] + EPSILON
+            && self.high[0] + EPSILON >= other.low[0]
+            && self.low[1] <= other.high[1] + EPSILON
+            && self.high[1] + EPSILON >= other.low[1]
     }
 
     fn contains(&self, point: Point2) -> bool {
@@ -713,6 +784,30 @@ mod tests {
         let mut overlay = Overlay::with_shapes(&oxide, &contact_sides);
         let overlap = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
         assert!(shape_area2(&overlap) * 10_000 < shape_area2(&contact_sides));
+    }
+
+    #[test]
+    fn subtracting_a_union_matches_sequential_occluder_subtraction() {
+        let subject = to_int_shapes(vec![vec![rectangle(0, 0, 10_000, 6_000)]]);
+        let occluders = vec![
+            to_int_shapes(vec![vec![rectangle(1_000, -1_000, 6_000, 4_000)]]),
+            to_int_shapes(vec![vec![rectangle(4_000, 2_000, 9_000, 7_000)]]),
+        ];
+        let mut sequential = subject.clone();
+        for occluder in &occluders {
+            let mut overlay = Overlay::with_shapes(&sequential, occluder);
+            sequential = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+        }
+        let union = union_regions(occluders);
+        let mut overlay = Overlay::with_shapes(&subject, &union);
+        let combined = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+
+        let mut overlay = Overlay::with_shapes(&sequential, &combined);
+        let only_sequential = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+        let mut overlay = Overlay::with_shapes(&combined, &sequential);
+        let only_combined = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+        assert_eq!(shape_area2(&only_sequential), 0);
+        assert_eq!(shape_area2(&only_combined), 0);
     }
 
     fn projected_surface_shapes(
