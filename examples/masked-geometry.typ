@@ -1,6 +1,6 @@
 #import "../src/kernel.typ" as kernel
 #import "../src/projection.typ": device-to-cetz
-#import "../src/slab.typ" as slab
+#import "../src/scene.typ" as scene
 #import "@preview/cetz:0.5.2": canvas, draw
 
 #set page(width: auto, height: auto, margin: 12mm)
@@ -24,7 +24,7 @@
 #let result = kernel.difference(subject, mask)
 #let cut-y = 2
 
-#let scene = (
+#let sample-scene = (
   (
     shapes: subject,
     bottom: -1.5,
@@ -97,7 +97,7 @@
       cull-face: none,
       {
         draw.transform(device-to-cetz)
-        slab.render(scene)
+        scene.render(sample-scene)
       },
     )
   })
@@ -107,6 +107,6 @@
 
 #align(center)[
   #canvas(length: 5mm, {
-    slab.render-section(scene, cut-y)
+    scene.render-section(sample-scene, cut-y)
   })
 ]
