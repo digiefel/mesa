@@ -38,18 +38,13 @@
   }
 }
 
-#let render(volumes) = {
+#let _render-faces(volumes) = {
   for (index, volume) in volumes.enumerate() {
     _validate-volume(volume, index)
   }
 
   let ordered = volumes.sorted(key: volume => volume.bottom)
-  let scene-bottom = ordered.first().bottom
   for (index, volume) in ordered.enumerate() {
-    let stroke = volume.at(
-      "stroke",
-      default: rgb("#263843") + .5pt,
-    )
     draw.on-layer(index, {
       polygon.extrude(
         volume.shapes,
@@ -58,15 +53,50 @@
         top-shapes: _exposed-top(ordered, volume),
         top-fill: volume.at("top-fill", default: rgb("#b8d6ed")),
         side-fill: volume.at("side-fill", default: rgb("#91b4ce")),
-        stroke: stroke,
-        bottom-stroke: if volume.bottom == scene-bottom {
-          stroke
-        } else {
-          none
-        },
+        stroke: none,
+        bottom-stroke: none,
       )
     })
   }
+}
+
+#let edge-styles = (
+  outline: rgb("#263843") + .5pt,
+  material: rgb("#263843") + .4pt,
+  internal: rgb("#49606e") + .3pt,
+)
+
+#let _normal-edge-role(edge) = {
+  if edge.visibility == "occluded" or edge.kind == "smooth" {
+    none
+  } else if edge.kind == "material" {
+    "material"
+  } else if edge.interior {
+    "internal"
+  } else {
+    "outline"
+  }
+}
+
+#let _render-edges(volumes, view, styles) = {
+  draw.on-layer(100, {
+    for edge in kernel.scene-topology(volumes, view) {
+      let role = _normal-edge-role(edge)
+      if role != none {
+        draw.line(
+          edge.start,
+          edge.end,
+          stroke: styles.at(role),
+        )
+      }
+    }
+  })
+}
+
+#let render(volumes, view: none, styles: edge-styles) = {
+  assert(view != none, message: "3D scene rendering requires a view")
+  _render-faces(volumes)
+  _render-edges(volumes, view, styles)
 }
 
 #let render-section(volumes, y) = {
@@ -142,7 +172,7 @@
     ).transparentize(45%)
     debug-volume
   })
-  render(debug-volumes)
+  _render-faces(debug-volumes)
 
   draw.on-layer(100, {
     for edge in kernel.scene-topology(volumes, view) {

@@ -108,7 +108,7 @@
       cull-face: none,
       {
         draw.transform(device-to-cetz)
-        scene.render(sample-scene)
+        scene.render(sample-scene, view: view)
       },
     )
   })
@@ -161,7 +161,7 @@
       cull-face: none,
       {
         draw.transform(device-to-cetz)
-        scene.render(cut-scene)
+        scene.render(cut-scene, view: view)
       },
     )
   })
