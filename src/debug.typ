@@ -10,6 +10,26 @@
 #import "projection.typ": project-face-content
 #import "layer-stack.typ": layer-stack as _layer-stack
 #import "scene.typ": topology-debug-styles as _topology-debug-styles
+#import "kernel.typ" as _kernel
+
+/// Inspect the structure and units of a GDS library.
+#let gds(data) = {
+  let info = _kernel.gds-info(data)
+  let layers = info.layers.map(
+    layer => str(layer.first()) + "/" + str(layer.last()),
+  )
+  table(
+    columns: (auto, 1fr),
+    column-gutter: 5mm,
+    row-gutter: 1.5mm,
+    align: (right, left),
+    [library], info.library,
+    [database unit], str(info.db-unit-meters * 1e9) + " nm",
+    [user unit], str(info.user-unit-meters * 1e6) + " µm",
+    [cells], info.cells.join(", "),
+    [layers], layers.join(", "),
+  )
+}
 
 /// Render a complete topology diagnostic for a layer stack.
 #let topology(body, ..options) = {

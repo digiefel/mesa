@@ -5,6 +5,12 @@
 
 #let version() = str(geometry-kernel.kernel_version())
 
+#let gds-info(data) = {
+  let (version, info) = cbor(geometry-kernel.gds_info(data))
+  assert.eq(version, protocol-version)
+  info
+}
+
 #let _encode-point(point) = point.map(
   component => int(calc.round(component * grid-scale)),
 )

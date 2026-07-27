@@ -6,6 +6,7 @@ use i_overlay::i_shape::int::shape::IntShapes;
 use i_overlay::string::clip::{ClipRule, IntClip};
 use serde::{Deserialize, Serialize};
 
+mod gds;
 mod topology;
 mod visibility;
 
@@ -81,6 +82,15 @@ struct SceneTopologyResponse {
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
 pub fn kernel_version() -> Vec<u8> {
     env!("CARGO_PKG_VERSION").as_bytes().to_vec()
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn gds_info(input: &[u8]) -> Result<Vec<u8>, String> {
+    let info = gds::inspect(input)?;
+    let mut output = Vec::new();
+    ciborium::into_writer(&(PROTOCOL_VERSION, info), &mut output)
+        .map_err(|error| format!("could not encode GDS information: {error}"))?;
+    Ok(output)
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]

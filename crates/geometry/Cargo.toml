@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ciborium = "0.2.2"
+gds21 = { path = "../../vendor/gds21" }
 i_overlay = { version = "7.0.2", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 wasm-minimal-protocol = "0.2.0"
