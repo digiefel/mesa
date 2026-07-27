@@ -41,6 +41,12 @@
   ),
 )
 
+#let cut-scene = scene.cut-y(
+  sample-scene,
+  cut-y,
+  keep: "positive",
+)
+
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
   for shape in shapes {
     draw.compound-path({
@@ -107,6 +113,40 @@
 
 #align(center)[
   #canvas(length: 5mm, {
+    draw.ortho(
+      x: 35deg,
+      y: 35deg,
+      sorted: true,
+      cull-face: none,
+      {
+        draw.transform(device-to-cetz)
+        scene.render-topology-debug(sample-scene)
+      },
+    )
+  })
+]
+
+#pagebreak()
+
+#align(center)[
+  #canvas(length: 5mm, {
     scene.render-section(sample-scene, cut-y)
+  })
+]
+
+#pagebreak()
+
+#align(center)[
+  #canvas(length: 5mm, {
+    draw.ortho(
+      x: 35deg,
+      y: 35deg,
+      sorted: true,
+      cull-face: none,
+      {
+        draw.transform(device-to-cetz)
+        scene.render(cut-scene)
+      },
+    )
   })
 ]

@@ -6,6 +6,8 @@ use i_overlay::i_shape::int::shape::IntShapes;
 use i_overlay::string::clip::{ClipRule, IntClip};
 use serde::{Deserialize, Serialize};
 
+mod topology;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_minimal_protocol::wasm_func;
 
@@ -43,6 +45,26 @@ struct CrossSectionRequest {
 struct CrossSectionResponse {
     version: u8,
     intervals: Vec<[i64; 2]>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ClipYRequest {
+    version: u8,
+    shapes: WireShapes,
+    y: i64,
+    positive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SceneTopologyRequest {
+    version: u8,
+    volumes: Vec<topology::WireVolume>,
+}
+
+#[derive(Debug, Serialize)]
+struct SceneTopologyResponse {
+    version: u8,
+    edges: Vec<topology::WireEdge>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
@@ -96,6 +118,55 @@ pub fn cross_section(input: &[u8]) -> Result<Vec<u8>, String> {
         version: PROTOCOL_VERSION,
         intervals,
     })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn clip_y(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: ClipYRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    validate_shapes("clip-y", &request.shapes)?;
+    let shapes = to_int_shapes(request.shapes);
+    let result = clip_shapes_at_y(shapes, request.y, request.positive);
+
+    encode_response(GeometryResponse {
+        version: PROTOCOL_VERSION,
+        shapes: from_int_shapes(result),
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn scene_topology(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: SceneTopologyRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    topology::validate_volumes(&request.volumes)?;
+    let edges = topology::scene_edges(&request.volumes);
+
+    let mut output = Vec::new();
+    ciborium::into_writer(
+        &SceneTopologyResponse {
+            version: PROTOCOL_VERSION,
+            edges,
+        },
+        &mut output,
+    )
+    .map_err(|error| format!("could not encode response: {error}"))?;
+    Ok(output)
 }
 
 fn validate_shapes(name: &str, shapes: &WireShapes) -> Result<(), String> {
@@ -205,6 +276,49 @@ fn x_bounds(shapes: &IntShapes<i64>) -> Option<(i64, i64)> {
     Some((minimum, maximum))
 }
 
+fn bounds(shapes: &IntShapes<i64>) -> Option<(i64, i64, i64, i64)> {
+    let mut points = shapes.iter().flatten().flatten();
+    let first = points.next()?;
+    let mut minimum_x = first.x;
+    let mut minimum_y = first.y;
+    let mut maximum_x = first.x;
+    let mut maximum_y = first.y;
+    for point in points {
+        minimum_x = minimum_x.min(point.x);
+        minimum_y = minimum_y.min(point.y);
+        maximum_x = maximum_x.max(point.x);
+        maximum_y = maximum_y.max(point.y);
+    }
+    Some((minimum_x, minimum_y, maximum_x, maximum_y))
+}
+
+fn clip_shapes_at_y(shapes: IntShapes<i64>, y: i64, positive: bool) -> IntShapes<i64> {
+    let Some((minimum_x, minimum_y, maximum_x, maximum_y)) = bounds(&shapes) else {
+        return Vec::new();
+    };
+
+    if positive && y <= minimum_y || !positive && y >= maximum_y {
+        return shapes;
+    }
+    if positive && y >= maximum_y || !positive && y <= minimum_y {
+        return Vec::new();
+    }
+
+    let (bottom, top) = if positive {
+        (y, maximum_y)
+    } else {
+        (minimum_y, y)
+    };
+    let clipping_shape = vec![vec![vec![
+        IntPoint::new(minimum_x, bottom),
+        IntPoint::new(maximum_x, bottom),
+        IntPoint::new(maximum_x, top),
+        IntPoint::new(minimum_x, top),
+    ]]];
+    let mut overlay = Overlay::with_shapes(&shapes, &clipping_shape);
+    overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd)
+}
+
 fn merge_intervals(intervals: Vec<[i64; 2]>) -> Vec<[i64; 2]> {
     let mut merged: Vec<[i64; 2]> = Vec::new();
     for [left, right] in intervals {
@@ -266,6 +380,22 @@ mod tests {
             vec![[0, 2], [4, 6], [7, 10]]
         );
         assert_eq!(horizontal_intervals(&shapes, 4), vec![[0, 6], [7, 10]]);
+    }
+
+    #[test]
+    fn clips_a_masked_polygon_to_either_side_of_a_cut() {
+        let subject = vec![vec![rectangle(0, 0, 10, 6)]];
+        let mask = vec![vec![rectangle(2, 1, 4, 3)], vec![rectangle(6, -1, 7, 7)]];
+        let mut overlay = Overlay::with_shapes(&to_int_shapes(subject), &to_int_shapes(mask));
+        let shapes = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+
+        let positive = from_int_shapes(clip_shapes_at_y(shapes.clone(), 2, true));
+        assert_eq!(positive.len(), 2);
+        assert_eq!(positive.iter().map(Vec::len).sum::<usize>(), 2);
+        assert_eq!(twice_area(&positive), 68);
+
+        let negative = from_int_shapes(clip_shapes_at_y(shapes, 2, false));
+        assert_eq!(twice_area(&negative), 32);
     }
 
     fn rectangle(left: i64, bottom: i64, right: i64, top: i64) -> WireContour {

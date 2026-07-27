@@ -39,12 +39,14 @@
   }
 }
 
-#let _edges(shapes, bottom, top, stroke) = {
+#let _edges(shapes, bottom, top, stroke, bottom-stroke) = {
   for shape in shapes {
     for contour in shape {
       let bottom-contour = contour.map(point => _at-height(point, bottom))
       let top-contour = contour.map(point => _at-height(point, top))
-      draw.line(..bottom-contour, close: true, stroke: stroke)
+      if bottom-stroke != none {
+        draw.line(..bottom-contour, close: true, stroke: bottom-stroke)
+      }
       draw.line(..top-contour, close: true, stroke: stroke)
 
       for point in contour {
@@ -66,13 +68,19 @@
   top-fill: rgb("#b8d6ed"),
   side-fill: rgb("#91b4ce"),
   stroke: rgb("#263843") + .5pt,
+  bottom-stroke: auto,
 ) = {
   assert(top > bottom, message: "extrusion top must be above its bottom")
+  let bottom-stroke = if bottom-stroke == auto {
+    stroke
+  } else {
+    bottom-stroke
+  }
   _side-faces(shapes, bottom, top, side-fill)
   _horizontal-face(
     if top-shapes == auto { shapes } else { top-shapes },
     top,
     top-fill,
   )
-  _edges(shapes, bottom, top, stroke)
+  _edges(shapes, bottom, top, stroke, bottom-stroke)
 }

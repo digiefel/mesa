@@ -44,7 +44,12 @@
   }
 
   let ordered = volumes.sorted(key: volume => volume.bottom)
+  let scene-bottom = ordered.first().bottom
   for (index, volume) in ordered.enumerate() {
+    let stroke = volume.at(
+      "stroke",
+      default: rgb("#263843") + .5pt,
+    )
     draw.on-layer(index, {
       polygon.extrude(
         volume.shapes,
@@ -53,10 +58,12 @@
         top-shapes: _exposed-top(ordered, volume),
         top-fill: volume.at("top-fill", default: rgb("#b8d6ed")),
         side-fill: volume.at("side-fill", default: rgb("#91b4ce")),
-        stroke: volume.at(
-          "stroke",
-          default: rgb("#263843") + .5pt,
-        ),
+        stroke: stroke,
+        bottom-stroke: if volume.bottom == scene-bottom {
+          stroke
+        } else {
+          none
+        },
       )
     })
   }
@@ -84,4 +91,64 @@
       )
     }
   }
+}
+
+#let cut-y(volumes, y, keep: "positive") = {
+  let result = ()
+  for volume in volumes {
+    let shapes = kernel.clip-y(volume.shapes, y, keep: keep)
+    if shapes.len() > 0 {
+      let clipped = volume
+      clipped.shapes = shapes
+      result.push(clipped)
+    }
+  }
+  result
+}
+
+#let render-topology-debug(volumes) = {
+  let debug-volumes = volumes.map(volume => {
+    let debug-volume = volume
+    debug-volume.stroke = none
+    debug-volume.top-fill = volume.at(
+      "top-fill",
+      default: rgb("#b8d6ed"),
+    ).transparentize(45%)
+    debug-volume.side-fill = volume.at(
+      "side-fill",
+      default: rgb("#91b4ce"),
+    ).transparentize(45%)
+    debug-volume
+  })
+  render(debug-volumes)
+
+  let styles = (
+    boundary: (
+      paint: rgb("#7c3aed"),
+      thickness: .8pt,
+      dash: "dashed",
+    ),
+    crease: (
+      paint: rgb("#d1495b"),
+      thickness: .8pt,
+    ),
+    material: (
+      paint: rgb("#e98a15"),
+      thickness: .6pt,
+    ),
+    smooth: (
+      paint: luma(55%),
+      thickness: .35pt,
+      dash: "dotted",
+    ),
+  )
+  draw.on-layer(100, {
+    for edge in kernel.scene-topology(volumes) {
+      draw.line(
+        edge.start,
+        edge.end,
+        stroke: styles.at(edge.kind),
+      )
+    }
+  })
 }
