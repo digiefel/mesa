@@ -81,7 +81,7 @@
 }
 
 #grid(
-  columns: 2,
+  columns: (9cm, auto),
   gutter: 10mm,
   align: center,
   [#semi.debug.gds(data)],
@@ -109,11 +109,19 @@
 
 #let section-y = layout.size.at(1) / 2
 
-#let step(name, body, section: none) = [
-  #stack(
-    dir: ttb,
-    spacing: 1.5mm,
-    align(center)[
+#let step(name, body, section: none, length: .35mm) = block(
+  width: 50mm,
+  height: 46mm,
+  inset: 3mm,
+  radius: 2pt,
+  fill: luma(98%),
+  stroke: luma(78%) + .5pt,
+)[
+  #grid(
+    rows: (1fr, auto),
+    row-gutter: 1.5mm,
+    align: center + horizon,
+    [
       #semi.layer-stack(
         body,
         size: layout.size,
@@ -121,10 +129,10 @@
         shading: "fancy",
         light: light,
         section: section,
-        length: .35mm,
+        length: length,
       )
     ],
-    align(center)[#text(8pt, weight: "medium", name)],
+    text(8pt, weight: "medium", name),
   )
 ]
 
@@ -143,4 +151,81 @@
     contacted,
     section: ((0, section-y), (layout.size.at(0), section-y)),
   ),
+)
+
+#pagebreak()
+
+#let gate-resist = {
+  import semi: *
+
+  oxidized
+  layer(
+    "gate-resist",
+    thickness: 12,
+    material: "resist",
+    mask: mask.invert(layout.gate),
+  )
+}
+
+#let gate-metal = {
+  import semi: *
+
+  gate-resist
+  layer(
+    "gate-metal",
+    thickness: 15,
+    material: "metal",
+    mask: layout.gate,
+  )
+}
+
+#let contact-resist = {
+  import semi: *
+
+  gated
+  layer(
+    "contact-resist",
+    thickness: 12,
+    material: "resist",
+    mask: mask.invert(layout.metal),
+  )
+}
+
+#let resist-etched = {
+  import semi: *
+
+  contact-resist
+  etch(depth: 5, mask: layout.metal)
+}
+
+#let blanket-metal = {
+  import semi: *
+
+  resist-etched
+  layer(
+    "contact-metal",
+    thickness: 10,
+    material: "metal",
+  )
+}
+
+#let lifted-off = {
+  import semi: *
+
+  contacted
+}
+
+#grid(
+  columns: 4,
+  gutter: 5mm,
+  row-gutter: 5mm,
+  align: center,
+  step([Substrate], substrate, length: .26mm),
+  step([SiO#sub[2]], oxidized, length: .26mm),
+  step([Gate resist], gate-resist, length: .26mm),
+  step([Gate metal], gate-metal, length: .26mm),
+  step([Contact resist], contact-resist, length: .26mm),
+  step([Etch], resist-etched, length: .26mm),
+  step([Blanket metal], blanket-metal, length: .26mm),
+  step([Lift-off], lifted-off, length: .26mm),
 )
