@@ -1,6 +1,6 @@
 #import "../src/kernel.typ" as kernel
-#import "../src/polygon.typ" as polygon
 #import "../src/projection.typ": device-to-cetz
+#import "../src/slab.typ" as slab
 #import "@preview/cetz:0.5.2": canvas, draw
 
 #set page(width: auto, height: auto, margin: 12mm)
@@ -22,10 +22,24 @@
 )
 
 #let result = kernel.difference(subject, mask)
-#let exposed-substrate = kernel.difference(subject, result)
 #let cut-y = 2
 #let substrate-section = kernel.cross-section(subject, cut-y)
 #let result-section = kernel.cross-section(result, cut-y)
+
+#let scene = (
+  (
+    shapes: subject,
+    bottom: -1.5,
+    top: 0,
+    top-fill: rgb("#c6d1d6"),
+    side-fill: rgb("#9fadb4"),
+  ),
+  (
+    shapes: result,
+    bottom: 0,
+    top: 1.5,
+  ),
+)
 
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
   for shape in shapes {
@@ -83,19 +97,7 @@
       cull-face: none,
       {
         draw.transform(device-to-cetz)
-        draw.on-layer(-1, {
-          polygon.extrude(
-            subject,
-            bottom: -1.5,
-            top: 0,
-            top-shapes: exposed-substrate,
-            top-fill: rgb("#c6d1d6"),
-            side-fill: rgb("#9fadb4"),
-          )
-        })
-        draw.on-layer(0, {
-          polygon.extrude(result, bottom: 0, top: 1.5)
-        })
+        slab.render(scene)
       },
     )
   })
