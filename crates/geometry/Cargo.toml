@@ -1,0 +1,13 @@
+[package]
+name = "semi-geometry"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+i_overlay = { version = "7.0.2", default-features = false }
+wasm-minimal-protocol = "0.2.0"
+

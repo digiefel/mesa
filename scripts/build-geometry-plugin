@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+if ! command -v cargo >/dev/null 2>&1; then
+  PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+  export PATH
+fi
+
+cargo build \
+  --release \
+  --target wasm32-unknown-unknown \
+  --package semi-geometry
+
+cp \
+  target/wasm32-unknown-unknown/release/semi_geometry.wasm \
+  src/plugin/semi_geometry.wasm
+
