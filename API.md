@@ -247,7 +247,7 @@ sample.
 
 ```text
 cosine = max(0, dot(face-normal, -light-direction))
-visibility = 0 if sample geometry blocks the light, otherwise 1
+visibility = 0 if the face points away from the light or sample geometry blocks it, otherwise 1
 brightness = (1 - intensity) + intensity * visibility * cosine
 ```
 
@@ -258,12 +258,13 @@ Changing the camera does not change the light direction, unshadowed
 brightness, or model-space shadow geometry.
 
 The light is infinitely far away, so all rays are parallel. Self-shadows are
-computed before rendering by projecting light-facing layer faces along the
-light direction. For the current aligned rectangular stacks, visibility is a
-single value for each face: if its centre is blocked, the complete face
-receives only the ambient term. The face is then rendered once at that
-brightness; no shadow overlay is drawn. This face-level assumption will need
-to change when the package supports offset or patterned process geometry.
+computed before rendering by projecting every other face along the light
+direction, including faces from the same layer. For the current aligned
+rectangular stacks, visibility is a single value for each face: if its centre
+is blocked, the complete face receives only the ambient term. The face is then
+rendered once at that brightness; no shadow overlay is drawn. This face-level
+assumption will need to change when the package supports offset or patterned
+process geometry.
 
 `shading` accepts `"none"`, `"flat"`, and `"fancy"`. fancy keeps the
 material's `fill`, including hatches and dots, but adds one-segment chamfer

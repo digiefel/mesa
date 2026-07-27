@@ -221,7 +221,7 @@
   )
 }
 
-#let _shadow-polygons(receiver, faces, toward-light) = {
+#let _shadow-polygons(receiver, receiver-index, faces, toward-light) = {
   let denominator = _dot(receiver.normal, toward-light)
   if denominator <= 1e-6 {
     return ()
@@ -229,11 +229,8 @@
 
   let basis = _face-basis(receiver)
   let polygons = ()
-  for occluder in faces {
-    if (
-      occluder.layer != receiver.layer
-      and _dot(occluder.normal, toward-light) > 1e-6
-    ) {
+  for (occluder-index, occluder) in faces.enumerate() {
+    if occluder-index != receiver-index {
       let distance = point => _dot(
         _subtract(point, basis.origin),
         receiver.normal,
@@ -271,16 +268,21 @@
   true
 }
 
-#let _face-visibility(receiver, faces, shading, light) = {
+#let _face-visibility(receiver, receiver-index, faces, shading, light) = {
   if shading == "none" or _light-intensity(light) == 0 {
     return 1
   }
 
   let toward-light = _toward-light(light)
   if _dot(receiver.normal, toward-light) <= 1e-6 {
-    return 1
+    return 0
   }
-  let polygons = _shadow-polygons(receiver, faces, toward-light)
+  let polygons = _shadow-polygons(
+    receiver,
+    receiver-index,
+    faces,
+    toward-light,
+  )
   if polygons.len() == 0 {
     return 1
   }
@@ -972,6 +974,7 @@
     for (index, face) in state.faces.enumerate() {
       let visibility = _face-visibility(
         face,
+        index,
         state.faces,
         face.shading,
         face.light,

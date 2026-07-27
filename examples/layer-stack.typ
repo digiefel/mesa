@@ -5,7 +5,7 @@
 #set text(size: 9pt, font: "Helvetica")
 
 #let sample-light = (
-  azimuth: 25deg,
+  azimuth: 15deg,
   elevation: 55deg,
   intensity: 0.25,
 )
