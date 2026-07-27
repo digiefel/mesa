@@ -1,6 +1,5 @@
 #import "@preview/cetz:0.5.2": draw
 #import "kernel.typ" as kernel
-#import "polygon.typ" as polygon
 
 #let _validate-volume(volume, index) = {
   assert(
@@ -19,23 +18,35 @@
   )
 }
 
-#let _covered-top(volumes, volume) = {
-  let covered = ()
-  for other in volumes {
-    if other.bottom == volume.top {
-      covered += other.shapes
+#let deposit(volumes, shapes, thickness) = {
+  if volumes.len() == 0 {
+    return ((
+      shapes: shapes,
+      bottom: 0,
+      top: thickness,
+    ),)
+  }
+
+  let remaining = shapes
+  let result = ()
+  for volume in volumes.sorted(key: volume => -volume.top) {
+    if remaining.len() > 0 {
+      let landed = kernel.intersection(remaining, volume.shapes)
+      if landed.len() > 0 {
+        result.push((
+          shapes: landed,
+          bottom: volume.top,
+          top: volume.top + thickness,
+        ))
+        remaining = kernel.difference(remaining, volume.shapes)
+      }
     }
   }
-  covered
-}
-
-#let _exposed-top(volumes, volume) = {
-  let covered = _covered-top(volumes, volume)
-  if covered.len() == 0 {
-    volume.shapes
-  } else {
-    kernel.difference(volume.shapes, covered)
-  }
+  assert(
+    remaining.len() == 0,
+    message: "deposition mask extends beyond the existing sample",
+  )
+  result
 }
 
 #let _render-faces(volumes) = {
@@ -43,20 +54,20 @@
     _validate-volume(volume, index)
   }
 
-  let ordered = volumes.sorted(key: volume => volume.bottom)
-  for (index, volume) in ordered.enumerate() {
-    draw.on-layer(index, {
-      polygon.extrude(
-        volume.shapes,
-        bottom: volume.bottom,
-        top: volume.top,
-        top-shapes: _exposed-top(ordered, volume),
-        top-fill: volume.at("top-fill", default: rgb("#b8d6ed")),
-        side-fill: volume.at("side-fill", default: rgb("#91b4ce")),
-        stroke: none,
-        bottom-stroke: none,
-      )
-    })
+  for face in kernel.scene-surfaces(volumes) {
+    if face.normal.at(2) >= 0 {
+      let volume = volumes.at(face.material)
+      let fill = if face.normal.at(2) > 0 {
+        volume.at("top-fill", default: rgb("#b8d6ed"))
+      } else {
+        volume.at("side-fill", default: rgb("#91b4ce"))
+      }
+      draw.compound-path({
+        for contour in face.contours {
+          draw.line(..contour, close: true)
+        }
+      }, fill: fill, fill-rule: "even-odd", stroke: none)
+    }
   }
 }
 

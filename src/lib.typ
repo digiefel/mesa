@@ -4,5 +4,6 @@
 #import "fills.typ": hatch, crosshatch, dots
 #import "gds.typ": gds
 #import "layer-stack.typ": layer, layer-stack
+#import "mask.typ" as mask
 #import "palette.typ": default-palette
 #import "debug.typ" as debug

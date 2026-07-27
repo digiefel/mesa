@@ -65,6 +65,16 @@
   _decode-shapes(result.shapes)
 }
 
+#let intersection(subject, mask) = {
+  let result = cbor(geometry-kernel.intersection(cbor.encode((
+    version: protocol-version,
+    subject: _encode-shapes(subject),
+    mask: _encode-shapes(mask),
+  ))))
+  assert.eq(result.version, protocol-version)
+  _decode-shapes(result.shapes)
+}
+
 #let cross-section(shapes, y) = {
   let result = cbor(geometry-kernel.cross_section(cbor.encode((
     version: protocol-version,
@@ -124,5 +134,23 @@
     interior: edge.interior,
     visibility: edge.visibility,
     faces: edge.faces,
+  ))
+}
+
+#let scene-surfaces(volumes) = {
+  let result = cbor(geometry-kernel.scene_surfaces(cbor.encode((
+    version: protocol-version,
+    volumes: volumes.enumerate().map(
+      ((index, volume)) => _encode-volume(volume, index),
+    ),
+  ))))
+  assert.eq(result.version, protocol-version)
+  result.faces.map(face => (
+    normal: face.normal,
+    material: face.material,
+    interior: face.interior,
+    contours: face.contours.map(
+      contour => contour.map(_decode-point),
+    ),
   ))
 }

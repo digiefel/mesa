@@ -36,7 +36,7 @@ pub(crate) struct AtomicEdge {
     pub(crate) incident: BTreeSet<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct Face {
     pub(crate) normal: Point3,
     pub(crate) material: u32,
@@ -59,6 +59,15 @@ struct FaceInterval {
     interior: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct VerticalFaceInterval {
+    start: i128,
+    end: i128,
+    volume: usize,
+    normal: Point3,
+    interior: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct LineKey {
     direction: Point3,
@@ -69,6 +78,12 @@ struct LineKey {
 struct LineSegments {
     points: BTreeMap<i128, Point3>,
     intervals: Vec<FaceInterval>,
+}
+
+#[derive(Default)]
+struct VerticalLineSegments {
+    points: BTreeMap<i128, Point3>,
+    intervals: Vec<VerticalFaceInterval>,
 }
 
 struct LineCoordinates {
@@ -96,7 +111,7 @@ pub(crate) fn scene_geometry(volumes: &[WireVolume]) -> (Vec<Face>, Vec<AtomicEd
     (faces, edges)
 }
 
-fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
+pub(crate) fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
     let canonical: Vec<WireVolume> = volumes
         .iter()
         .map(|volume| WireVolume {
@@ -139,9 +154,9 @@ fn scene_faces(volumes: &[WireVolume]) -> Vec<Face> {
             volume.material,
         );
 
-        add_vertical_faces(&mut faces, volume);
     }
 
+    add_exposed_vertical_faces(&mut faces, &canonical);
     faces
 }
 
@@ -166,25 +181,109 @@ fn add_horizontal_faces(
     }
 }
 
-fn add_vertical_faces(faces: &mut Vec<Face>, volume: &WireVolume) {
-    for shape in &volume.shapes {
-        for (contour_index, contour) in shape.iter().enumerate() {
-            for index in 0..contour.len() {
-                let [x0, y0] = contour[index];
-                let [x1, y1] = contour[(index + 1) % contour.len()];
-                let bottom_start = [x0, y0, volume.bottom];
-                let bottom_end = [x1, y1, volume.bottom];
-                let top_start = [x0, y0, volume.top];
-                let top_end = [x1, y1, volume.top];
-                faces.push(Face {
-                    normal: [y1 - y0, x0 - x1, 0],
-                    material: volume.material,
-                    interior: contour_index > 0,
-                    contours: vec![vec![bottom_start, bottom_end, top_end, top_start]],
-                });
+fn add_exposed_vertical_faces(faces: &mut Vec<Face>, volumes: &[WireVolume]) {
+    let mut lines: BTreeMap<LineKey, VerticalLineSegments> = BTreeMap::new();
+    for (volume, geometry) in volumes.iter().enumerate() {
+        for shape in &geometry.shapes {
+            for (contour_index, contour) in shape.iter().enumerate() {
+                for index in 0..contour.len() {
+                    let [x0, y0] = contour[index];
+                    let [x1, y1] = contour[(index + 1) % contour.len()];
+                    let Some(coordinates) = line_coordinates(Segment {
+                        start: [x0, y0, 0],
+                        end: [x1, y1, 0],
+                        interior: contour_index > 0,
+                    }) else {
+                        continue;
+                    };
+                    let line = lines.entry(coordinates.key).or_default();
+                    line.points.insert(coordinates.start.0, coordinates.start.1);
+                    line.points.insert(coordinates.end.0, coordinates.end.1);
+                    line.intervals.push(VerticalFaceInterval {
+                        start: coordinates.start.0.min(coordinates.end.0),
+                        end: coordinates.start.0.max(coordinates.end.0),
+                        volume,
+                        normal: [y1 - y0, x0 - x1, 0],
+                        interior: contour_index > 0,
+                    });
+                }
             }
         }
     }
+
+    for line in lines.values() {
+        let coordinates: Vec<i128> = line.points.keys().copied().collect();
+        for pair in coordinates.windows(2) {
+            let start = pair[0];
+            let end = pair[1];
+            let incident: Vec<VerticalFaceInterval> = line
+                .intervals
+                .iter()
+                .filter(|interval| interval.start <= start && end <= interval.end)
+                .copied()
+                .collect();
+            let mut rendered = BTreeSet::new();
+            for interval in &incident {
+                if !rendered.insert((interval.volume, interval.normal, interval.interior)) {
+                    continue;
+                }
+                let volume = &volumes[interval.volume];
+                let covered = incident
+                    .iter()
+                    .filter(|other| other.volume != interval.volume)
+                    .map(|other| {
+                        let other = &volumes[other.volume];
+                        (other.bottom, other.top)
+                    });
+                for (bottom, top) in uncovered_intervals(volume.bottom, volume.top, covered) {
+                    let [x0, y0, _] = line.points[&start];
+                    let [x1, y1, _] = line.points[&end];
+                    faces.push(Face {
+                        normal: interval.normal,
+                        material: volume.material,
+                        interior: interval.interior,
+                        contours: vec![vec![
+                            [x0, y0, bottom],
+                            [x1, y1, bottom],
+                            [x1, y1, top],
+                            [x0, y0, top],
+                        ]],
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn uncovered_intervals(
+    bottom: i64,
+    top: i64,
+    covered: impl Iterator<Item = (i64, i64)>,
+) -> Vec<(i64, i64)> {
+    let mut covered: Vec<(i64, i64)> = covered
+        .filter_map(|(other_bottom, other_top)| {
+            let start = bottom.max(other_bottom);
+            let end = top.min(other_top);
+            (start < end).then_some((start, end))
+        })
+        .collect();
+    covered.sort_unstable();
+
+    let mut result = Vec::new();
+    let mut cursor = bottom;
+    for (start, end) in covered {
+        if cursor < start {
+            result.push((cursor, start));
+        }
+        cursor = cursor.max(end);
+        if cursor >= top {
+            break;
+        }
+    }
+    if cursor < top {
+        result.push((cursor, top));
+    }
+    result
 }
 
 fn atomic_edges(faces: &[Face]) -> Vec<AtomicEdge> {
@@ -473,6 +572,43 @@ mod tests {
             Some(true)
         );
         assert!(edges.iter().all(|edge| edge.kind != EdgeKind::Boundary));
+    }
+
+    #[test]
+    fn removes_faces_buried_between_adjacent_materials() {
+        let bounds = vec![vec![rectangle(0, 0, 10, 6)]];
+        let contact = vec![vec![rectangle(2, 1, 4, 3)]];
+        let oxide = difference_shapes(&bounds, &contact);
+        let volumes = vec![
+            WireVolume {
+                shapes: bounds,
+                bottom: 0,
+                top: 40,
+                material: 0,
+            },
+            WireVolume {
+                shapes: oxide,
+                bottom: 40,
+                top: 45,
+                material: 1,
+            },
+            WireVolume {
+                shapes: contact,
+                bottom: 40,
+                top: 50,
+                material: 2,
+            },
+        ];
+
+        let faces = scene_faces(&volumes);
+        assert!(!faces
+            .iter()
+            .any(|face| face.material == 0 && face.normal == [0, 0, 1]));
+        assert!(faces
+            .iter()
+            .filter(|face| face.material == 2 && face.normal[2] == 0)
+            .flat_map(|face| face.contours.iter().flatten())
+            .all(|point| point[2] >= 45));
     }
 
     fn edge_kind(edges: &[AtomicEdge], start: Point3, end: Point3) -> Option<EdgeKind> {

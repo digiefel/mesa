@@ -23,6 +23,7 @@
   face-content-angle as _face-content-angle,
 )
 #import "scene.typ" as _scene
+#import "kernel.typ" as _kernel
 
 #let _merge-dictionaries(base, overrides) = {
   let merged = base
@@ -939,9 +940,16 @@
     message: "variant must be an integer or auto",
   )
   assert(
-    mask == auto or type(mask) == array,
-    message: "layer mask must be polygon geometry or auto",
+    mask == auto or type(mask) in (array, dictionary),
+    message: "layer mask must be polygon geometry, mask.invert geometry, or auto",
   )
+  if type(mask) == dictionary {
+    assert(
+      mask.at("operation", default: none) == "invert"
+        and type(mask.at("shapes", default: none)) == array,
+      message: "layer mask dictionary must be created with mask.invert",
+    )
+  }
   assert(
     label-transform == auto
       or label-transform in ("none", "rotate", "project"),
@@ -962,8 +970,25 @@
     )
 
     let (width, depth) = state.size
-    let bottom = state.height
-    let top = bottom + thickness
+    let bounds = (
+      (
+        ((0, 0), (width, 0), (width, depth), (0, depth)),
+      ),
+    )
+    let footprint = if mask == auto {
+      bounds
+    } else if type(mask) == dictionary {
+      _kernel.difference(bounds, mask.shapes)
+    } else {
+      mask
+    }
+    let placements = _scene.deposit(state.volumes, footprint, thickness)
+    assert(
+      placements.len() > 0,
+      message: "layer " + repr(name) + " has no supported deposition area",
+    )
+    let bottom = calc.min(..placements.map(placement => placement.bottom))
+    let top = calc.max(..placements.map(placement => placement.top))
     let middle = (bottom + top) / 2
     let family-name = if material == auto { "default" } else { material }
     let occurrence = state.material-counts.at(family-name, default: 0)
@@ -1233,29 +1258,25 @@
     )
 
     cetz.draw.set-ctx(ctx => {
-      ctx.shared-state.semi.height = top
-      let footprint = if mask == auto {
-        (
-          (
-            ((0, 0), (width, 0), (width, depth), (0, depth)),
-          ),
-        )
-      } else {
-        mask
-      }
+      ctx.shared-state.semi.height = calc.max(
+        ctx.shared-state.semi.height,
+        top,
+      )
       let fill = resolved-style.at("fill", default: none)
-      ctx.shared-state.semi.volumes.push((
-        shapes: footprint,
-        bottom: bottom,
-        top: top,
-        top-fill: fill,
-        side-fill: fill,
-        section-fill: fill,
-        debug-fill: resolved-style.at(
-          "base-color",
-          default: rgb("#b8d6ed"),
-        ),
-      ))
+      for placement in placements {
+        ctx.shared-state.semi.volumes.push((
+          shapes: placement.shapes,
+          bottom: placement.bottom,
+          top: placement.top,
+          top-fill: fill,
+          side-fill: fill,
+          section-fill: fill,
+          debug-fill: resolved-style.at(
+            "base-color",
+            default: rgb("#b8d6ed"),
+          ),
+        ))
+      }
       ctx.shared-state.semi.masked = (
         ctx.shared-state.semi.masked
           or mask != auto

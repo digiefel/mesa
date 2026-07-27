@@ -79,6 +79,18 @@ struct SceneTopologyResponse {
     edges: Vec<visibility::WireEdge>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SceneSurfacesRequest {
+    version: u8,
+    volumes: Vec<topology::WireVolume>,
+}
+
+#[derive(Debug, Serialize)]
+struct SceneSurfacesResponse {
+    version: u8,
+    faces: Vec<topology::Face>,
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
 pub fn kernel_version() -> Vec<u8> {
     env!("CARGO_PKG_VERSION").as_bytes().to_vec()
@@ -123,6 +135,32 @@ pub fn difference(input: &[u8]) -> Result<Vec<u8>, String> {
     let mask = to_int_shapes(request.mask);
     let mut overlay = Overlay::with_shapes(&subject, &mask);
     let result = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+
+    encode_response(GeometryResponse {
+        version: PROTOCOL_VERSION,
+        shapes: from_int_shapes(result),
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn intersection(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: DifferenceRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    validate_shapes("subject", &request.subject)?;
+    validate_shapes("mask", &request.mask)?;
+
+    let subject = to_int_shapes(request.subject);
+    let mask = to_int_shapes(request.mask);
+    let mut overlay = Overlay::with_shapes(&subject, &mask);
+    let result = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
 
     encode_response(GeometryResponse {
         version: PROTOCOL_VERSION,
@@ -225,6 +263,32 @@ pub fn scene_topology(input: &[u8]) -> Result<Vec<u8>, String> {
         &SceneTopologyResponse {
             version: PROTOCOL_VERSION,
             edges,
+        },
+        &mut output,
+    )
+    .map_err(|error| format!("could not encode response: {error}"))?;
+    Ok(output)
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn scene_surfaces(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: SceneSurfacesRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    topology::validate_volumes(&request.volumes)?;
+    let faces = topology::scene_faces(&request.volumes);
+    let mut output = Vec::new();
+    ciborium::into_writer(
+        &SceneSurfacesResponse {
+            version: PROTOCOL_VERSION,
+            faces,
         },
         &mut output,
     )
@@ -500,6 +564,24 @@ mod tests {
             3
         );
         assert_eq!(twice_area(&response.shapes), 100);
+    }
+
+    #[test]
+    fn intersects_polygon_regions() {
+        let request = DifferenceRequest {
+            version: PROTOCOL_VERSION,
+            subject: vec![vec![rectangle(0, 0, 10, 6)]],
+            mask: vec![vec![rectangle(4, -1, 12, 3)]],
+        };
+        let mut input = Vec::new();
+        ciborium::into_writer(&request, &mut input).unwrap();
+
+        let encoded = intersection(&input).unwrap();
+        let response: GeometryResponse = ciborium::from_reader(encoded.as_slice()).unwrap();
+
+        assert_eq!(response.version, PROTOCOL_VERSION);
+        assert_eq!(response.shapes.len(), 1);
+        assert_eq!(twice_area(&response.shapes).abs(), 36);
     }
 
     #[test]
