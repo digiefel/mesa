@@ -69,6 +69,22 @@
   _decode-shapes(result.shapes)
 }
 
+#let clip-line(shapes, from, to, keep: "left") = {
+  assert(
+    keep in ("left", "right"),
+    message: "clip-line keep must be \"left\" or \"right\"",
+  )
+  let result = cbor(geometry-kernel.clip_line(cbor.encode((
+    version: protocol-version,
+    shapes: _encode-shapes(shapes),
+    from: _encode-point(from),
+    to: _encode-point(to),
+    keep_left: keep == "left",
+  ))))
+  assert.eq(result.version, protocol-version)
+  _decode-shapes(result.shapes)
+}
+
 #let scene-topology(volumes, view) = {
   let result = cbor(geometry-kernel.scene_topology(cbor.encode((
     version: protocol-version,

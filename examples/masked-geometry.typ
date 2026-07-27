@@ -23,7 +23,8 @@
 )
 
 #let result = kernel.difference(subject, mask)
-#let cut-y = 2
+#let section-y = 2
+#let cut-line = ((0, 2), (10, 4))
 #let view-x = 35deg
 #let view-y = 35deg
 #let view-z = 0deg
@@ -63,10 +64,10 @@
   ),
 )
 
-#let cut-scene = scene.cut-y(
+#let cut-scene = scene.cut-line(
   sample-scene,
-  cut-y,
-  keep: "positive",
+  cut-line,
+  keep: "left",
 )
 
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
@@ -102,8 +103,7 @@
     #geometry-view({
       draw-shapes(result, fill: rgb("#b8d6ed"))
       draw.line(
-        (0, cut-y),
-        (10, cut-y),
+        ..cut-line,
         stroke: (paint: rgb("#d1495b"), thickness: .5pt, dash: "dashed"),
       )
     })
@@ -159,7 +159,7 @@
 
 #align(center)[
   #canvas(length: 5mm, {
-    scene.render-section(sample-scene, cut-y)
+    scene.render-section(sample-scene, section-y)
   })
 ]
 

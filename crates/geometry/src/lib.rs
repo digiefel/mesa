@@ -56,6 +56,15 @@ struct ClipYRequest {
     positive: bool,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ClipLineRequest {
+    version: u8,
+    shapes: WireShapes,
+    from: WirePoint,
+    to: WirePoint,
+    keep_left: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct SceneTopologyRequest {
     version: u8,
@@ -137,6 +146,36 @@ pub fn clip_y(input: &[u8]) -> Result<Vec<u8>, String> {
     validate_shapes("clip-y", &request.shapes)?;
     let shapes = to_int_shapes(request.shapes);
     let result = clip_shapes_at_y(shapes, request.y, request.positive);
+
+    encode_response(GeometryResponse {
+        version: PROTOCOL_VERSION,
+        shapes: from_int_shapes(result),
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn clip_line(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: ClipLineRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    validate_shapes("clip-line", &request.shapes)?;
+    if request.from == request.to {
+        return Err("clip-line requires two distinct points".into());
+    }
+    let shapes = to_int_shapes(request.shapes);
+    let result = clip_shapes_at_line(
+        shapes,
+        IntPoint::new(request.from[0], request.from[1]),
+        IntPoint::new(request.to[0], request.to[1]),
+        request.keep_left,
+    );
 
     encode_response(GeometryResponse {
         version: PROTOCOL_VERSION,
@@ -296,30 +335,101 @@ fn bounds(shapes: &IntShapes<i64>) -> Option<(i64, i64, i64, i64)> {
 }
 
 fn clip_shapes_at_y(shapes: IntShapes<i64>, y: i64, positive: bool) -> IntShapes<i64> {
+    clip_shapes_at_line(
+        shapes,
+        IntPoint::new(0, y),
+        IntPoint::new(1, y),
+        positive,
+    )
+}
+
+fn clip_shapes_at_line(
+    shapes: IntShapes<i64>,
+    from: IntPoint<i64>,
+    to: IntPoint<i64>,
+    keep_left: bool,
+) -> IntShapes<i64> {
     let Some((minimum_x, minimum_y, maximum_x, maximum_y)) = bounds(&shapes) else {
         return Vec::new();
     };
 
-    if positive && y <= minimum_y || !positive && y >= maximum_y {
-        return shapes;
-    }
-    if positive && y >= maximum_y || !positive && y <= minimum_y {
+    let (from, to) = if keep_left { (from, to) } else { (to, from) };
+    let rectangle = vec![
+        IntPoint::new(minimum_x, minimum_y),
+        IntPoint::new(maximum_x, minimum_y),
+        IntPoint::new(maximum_x, maximum_y),
+        IntPoint::new(minimum_x, maximum_y),
+    ];
+    let clipping_contour = clip_contour_to_left_half_plane(&rectangle, from, to);
+    if clipping_contour.len() < 3 {
         return Vec::new();
     }
-
-    let (bottom, top) = if positive {
-        (y, maximum_y)
-    } else {
-        (minimum_y, y)
-    };
-    let clipping_shape = vec![vec![vec![
-        IntPoint::new(minimum_x, bottom),
-        IntPoint::new(maximum_x, bottom),
-        IntPoint::new(maximum_x, top),
-        IntPoint::new(minimum_x, top),
-    ]]];
+    if clipping_contour == rectangle {
+        return shapes;
+    }
+    let clipping_shape = vec![vec![clipping_contour]];
     let mut overlay = Overlay::with_shapes(&shapes, &clipping_shape);
     overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd)
+}
+
+fn clip_contour_to_left_half_plane(
+    contour: &[IntPoint<i64>],
+    from: IntPoint<i64>,
+    to: IntPoint<i64>,
+) -> Vec<IntPoint<i64>> {
+    let mut result = Vec::new();
+    let mut start = *contour.last().expect("bounding rectangle is not empty");
+    let mut start_side = line_side(from, to, start);
+    for &end in contour {
+        let end_side = line_side(from, to, end);
+        let start_inside = start_side >= 0;
+        let end_inside = end_side >= 0;
+        if start_inside != end_inside {
+            result.push(line_intersection(start, end, start_side, end_side));
+        }
+        if end_inside {
+            result.push(end);
+        }
+        start = end;
+        start_side = end_side;
+    }
+    result.dedup();
+    if result.len() > 1 && result.first() == result.last() {
+        result.pop();
+    }
+    result
+}
+
+fn line_side(from: IntPoint<i64>, to: IntPoint<i64>, point: IntPoint<i64>) -> i128 {
+    (i128::from(to.x) - i128::from(from.x)) * (i128::from(point.y) - i128::from(from.y))
+        - (i128::from(to.y) - i128::from(from.y))
+            * (i128::from(point.x) - i128::from(from.x))
+}
+
+fn line_intersection(
+    start: IntPoint<i64>,
+    end: IntPoint<i64>,
+    start_side: i128,
+    end_side: i128,
+) -> IntPoint<i64> {
+    let denominator = start_side - end_side;
+    let x = i128::from(start.x) * denominator
+        + (i128::from(end.x) - i128::from(start.x)) * start_side;
+    let y = i128::from(start.y) * denominator
+        + (i128::from(end.y) - i128::from(start.y)) * start_side;
+    IntPoint::new(
+        rounded_division(x, denominator) as i64,
+        rounded_division(y, denominator) as i64,
+    )
+}
+
+fn rounded_division(numerator: i128, denominator: i128) -> i128 {
+    let sign = if numerator.signum() == denominator.signum() {
+        1
+    } else {
+        -1
+    };
+    sign * (numerator.abs() + denominator.abs() / 2) / denominator.abs()
 }
 
 fn merge_intervals(intervals: Vec<[i64; 2]>) -> Vec<[i64; 2]> {
@@ -399,6 +509,41 @@ mod tests {
 
         let negative = from_int_shapes(clip_shapes_at_y(shapes, 2, false));
         assert_eq!(twice_area(&negative), 32);
+    }
+
+    #[test]
+    fn clips_polygon_geometry_to_either_side_of_an_arbitrary_line() {
+        let subject = vec![vec![rectangle(0, 0, 10, 6)]];
+        let mask = vec![vec![rectangle(2, 1, 4, 3)], vec![rectangle(6, -1, 7, 7)]];
+        let mut overlay = Overlay::with_shapes(&to_int_shapes(subject), &to_int_shapes(mask));
+        let shapes = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+        let from = IntPoint::new(0, 2);
+        let to = IntPoint::new(10, 4);
+
+        let left = from_int_shapes(clip_shapes_at_line(shapes.clone(), from, to, true));
+        let right = from_int_shapes(clip_shapes_at_line(shapes, from, to, false));
+
+        assert_eq!(twice_area(&left) + twice_area(&right), 100);
+        assert_eq!(twice_area(&left), 53);
+        assert_eq!(twice_area(&right), 47);
+    }
+
+    #[test]
+    fn rejects_a_cut_line_without_direction() {
+        let request = ClipLineRequest {
+            version: PROTOCOL_VERSION,
+            shapes: vec![vec![rectangle(0, 0, 10, 6)]],
+            from: [3, 2],
+            to: [3, 2],
+            keep_left: true,
+        };
+        let mut input = Vec::new();
+        ciborium::into_writer(&request, &mut input).unwrap();
+
+        assert_eq!(
+            clip_line(&input).unwrap_err(),
+            "clip-line requires two distinct points"
+        );
     }
 
     fn rectangle(left: i64, bottom: i64, right: i64, top: i64) -> WireContour {

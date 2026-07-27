@@ -136,6 +136,28 @@
   result
 }
 
+#let cut-line(volumes, line, keep: "left") = {
+  assert(
+    type(line) == array and line.len() == 2,
+    message: "cut line must contain two points",
+  )
+  let result = ()
+  for volume in volumes {
+    let shapes = kernel.clip-line(
+      volume.shapes,
+      line.first(),
+      line.last(),
+      keep: keep,
+    )
+    if shapes.len() > 0 {
+      let clipped = volume
+      clipped.shapes = shapes
+      result.push(clipped)
+    }
+  }
+  result
+}
+
 #let topology-debug-styles = (
   outline: (
     paint: rgb("#263843"),
