@@ -3,6 +3,7 @@ use i_overlay::core::overlay::Overlay;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::i_shape::int::shape::IntShapes;
+use i_overlay::string::clip::{ClipRule, IntClip};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "wasm32")]
@@ -29,6 +30,19 @@ struct DifferenceRequest {
 struct GeometryResponse {
     version: u8,
     shapes: WireShapes,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CrossSectionRequest {
+    version: u8,
+    shapes: WireShapes,
+    y: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CrossSectionResponse {
+    version: u8,
+    intervals: Vec<[i64; 2]>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
@@ -59,6 +73,28 @@ pub fn difference(input: &[u8]) -> Result<Vec<u8>, String> {
     encode_response(GeometryResponse {
         version: PROTOCOL_VERSION,
         shapes: from_int_shapes(result),
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn cross_section(input: &[u8]) -> Result<Vec<u8>, String> {
+    let request: CrossSectionRequest =
+        ciborium::from_reader(input).map_err(|error| format!("invalid request: {error}"))?;
+
+    if request.version != PROTOCOL_VERSION {
+        return Err(format!(
+            "unsupported geometry protocol version {}; expected {}",
+            request.version, PROTOCOL_VERSION
+        ));
+    }
+
+    validate_shapes("cross-section", &request.shapes)?;
+    let shapes = to_int_shapes(request.shapes);
+    let intervals = horizontal_intervals(&shapes, request.y);
+
+    encode_cross_section(CrossSectionResponse {
+        version: PROTOCOL_VERSION,
+        intervals,
     })
 }
 
@@ -121,6 +157,68 @@ fn encode_response(response: GeometryResponse) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
+fn encode_cross_section(response: CrossSectionResponse) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    ciborium::into_writer(&response, &mut output)
+        .map_err(|error| format!("could not encode response: {error}"))?;
+    Ok(output)
+}
+
+fn horizontal_intervals(shapes: &IntShapes<i64>, y: i64) -> Vec<[i64; 2]> {
+    let Some((minimum_x, maximum_x)) = x_bounds(shapes) else {
+        return Vec::new();
+    };
+    let line = [
+        IntPoint::new(minimum_x.saturating_sub(1), y),
+        IntPoint::new(maximum_x.saturating_add(1), y),
+    ];
+    let mut intervals: Vec<[i64; 2]> = shapes
+        .clip_line(
+            line,
+            FillRule::EvenOdd,
+            ClipRule {
+                invert: false,
+                boundary_included: true,
+            },
+        )
+        .into_iter()
+        .filter_map(|path| {
+            let left = path.iter().map(|point| point.x).min()?;
+            let right = path.iter().map(|point| point.x).max()?;
+            (left < right).then_some([left, right])
+        })
+        .collect();
+
+    intervals.sort_unstable_by_key(|interval| interval[0]);
+    merge_intervals(intervals)
+}
+
+fn x_bounds(shapes: &IntShapes<i64>) -> Option<(i64, i64)> {
+    let mut points = shapes.iter().flatten().flatten();
+    let first = points.next()?;
+    let mut minimum = first.x;
+    let mut maximum = first.x;
+    for point in points {
+        minimum = minimum.min(point.x);
+        maximum = maximum.max(point.x);
+    }
+    Some((minimum, maximum))
+}
+
+fn merge_intervals(intervals: Vec<[i64; 2]>) -> Vec<[i64; 2]> {
+    let mut merged: Vec<[i64; 2]> = Vec::new();
+    for [left, right] in intervals {
+        if let Some(last) = merged.last_mut()
+            && left <= last[1]
+        {
+            last[1] = last[1].max(right);
+        } else {
+            merged.push([left, right]);
+        }
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +252,20 @@ mod tests {
             3
         );
         assert_eq!(twice_area(&response.shapes), 100);
+    }
+
+    #[test]
+    fn slices_a_masked_polygon_into_intervals() {
+        let subject = vec![vec![rectangle(0, 0, 10, 6)]];
+        let mask = vec![vec![rectangle(2, 1, 4, 3)], vec![rectangle(6, -1, 7, 7)]];
+        let mut overlay = Overlay::with_shapes(&to_int_shapes(subject), &to_int_shapes(mask));
+        let shapes = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+
+        assert_eq!(
+            horizontal_intervals(&shapes, 2),
+            vec![[0, 2], [4, 6], [7, 10]]
+        );
+        assert_eq!(horizontal_intervals(&shapes, 4), vec![[0, 6], [7, 10]]);
     }
 
     fn rectangle(left: i64, bottom: i64, right: i64, top: i64) -> WireContour {

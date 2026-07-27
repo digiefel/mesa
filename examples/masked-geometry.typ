@@ -23,6 +23,9 @@
 
 #let result = kernel.difference(subject, mask)
 #let exposed-substrate = kernel.difference(subject, result)
+#let cut-y = 2
+#let substrate-section = kernel.cross-section(subject, cut-y)
+#let result-section = kernel.cross-section(result, cut-y)
 
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
   for shape in shapes {
@@ -56,6 +59,11 @@
   [
     #geometry-view({
       draw-shapes(result, fill: rgb("#b8d6ed"))
+      draw.line(
+        (0, cut-y),
+        (10, cut-y),
+        stroke: (paint: rgb("#d1495b"), thickness: .5pt, dash: "dashed"),
+      )
     })
   ],
 )
@@ -90,5 +98,28 @@
         })
       },
     )
+  })
+]
+
+#pagebreak()
+
+#align(center)[
+  #canvas(length: 5mm, {
+    for interval in substrate-section {
+      draw.rect(
+        (interval.first(), -1.5),
+        (interval.last(), 0),
+        fill: rgb("#9fadb4"),
+        stroke: rgb("#263843") + .5pt,
+      )
+    }
+    for interval in result-section {
+      draw.rect(
+        (interval.first(), 0),
+        (interval.last(), 1.5),
+        fill: rgb("#b8d6ed"),
+        stroke: rgb("#263843") + .5pt,
+      )
+    }
   })
 ]

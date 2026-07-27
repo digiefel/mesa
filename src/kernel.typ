@@ -34,3 +34,15 @@
   assert.eq(result.version, protocol-version)
   _decode-shapes(result.shapes)
 }
+
+#let cross-section(shapes, y) = {
+  let result = cbor(geometry-kernel.cross_section(cbor.encode((
+    version: protocol-version,
+    shapes: _encode-shapes(shapes),
+    y: int(calc.round(y * grid-scale)),
+  ))))
+  assert.eq(result.version, protocol-version)
+  result.intervals.map(interval => interval.map(
+    component => component / grid-scale,
+  ))
+}
