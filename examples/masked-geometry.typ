@@ -1,5 +1,6 @@
-#import "../src/lib.typ" as semi
 #import "../src/kernel.typ" as kernel
+#import "../src/polygon.typ" as polygon
+#import "../src/projection.typ": device-to-cetz
 #import "@preview/cetz:0.5.2": canvas, draw
 
 #set page(width: auto, height: auto, margin: 12mm)
@@ -21,6 +22,7 @@
 )
 
 #let result = kernel.difference(subject, mask)
+#let exposed-substrate = kernel.difference(subject, result)
 
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
   for shape in shapes {
@@ -64,41 +66,29 @@
   geometry kernel #kernel.version()
 ])
 
-#let sample = {
-  import semi: *
-
-  layer(
-    "substrate",
-    thickness: 20,
-    material: "substrate",
-    label: [Si],
-    fade-bottom: (
-      start: 50%,
-      end: 99%,
-      color: white,
-    ),
-  )
-}
-
-#grid(
-  columns: 2,
-  gutter: 12mm,
-  align: center,
-  [
-    #align(center)[
-      #semi.layer-stack(sample)
-    ]
-  ],
-  [
-    #align(center)[
-      #semi.layer-stack(
-        sample,
-        label-transform: "project",
-        camera: (
-          azimuth: 35deg,
-          elevation: 35deg,
-        ),
-      )
-    ]
-  ],
-)
+#align(center)[
+  #canvas(length: 5mm, {
+    draw.ortho(
+      x: 35deg,
+      y: 35deg,
+      sorted: true,
+      cull-face: none,
+      {
+        draw.transform(device-to-cetz)
+        draw.on-layer(-1, {
+          polygon.extrude(
+            subject,
+            bottom: -1.5,
+            top: 0,
+            top-shapes: exposed-substrate,
+            top-fill: rgb("#c6d1d6"),
+            side-fill: rgb("#9fadb4"),
+          )
+        })
+        draw.on-layer(0, {
+          polygon.extrude(result, bottom: 0, top: 1.5)
+        })
+      },
+    )
+  })
+]
