@@ -1,6 +1,6 @@
 #import "@preview/cetz:0.5.2": draw as cetz-draw
 #import cetz-draw: *
-#import "layer-stack.typ": project-face-content
+#import "projection.typ": project-face-content
 
 #let _projection-target(value) = {
   assert(

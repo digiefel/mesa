@@ -1,75 +1,26 @@
 #import "@preview/cetz:0.5.2"
 #import "palette.typ": default-palette
-
-#let _device-to-cetz = (
-  (1, 0, 0, 0),
-  (0, 0, 1, 0),
-  (0, -1, 0, 0),
-  (0, 0, 0, 1),
+#import "geometry.typ": (
+  add as _add,
+  scale as _scale,
+  dot as _dot,
+  unit as _unit,
+  dot-2d as _dot-2d,
+  center-2d as _center-2d,
 )
-
-#let _inverse-transform-point(matrix, point) = {
-  let ((a, b, c, tx), (d, e, f, ty), (g, h, i, tz), _) = matrix
-  let determinant = (
-    a * (e * i - f * h)
-      - b * (d * i - f * g)
-      + c * (d * h - e * g)
-  )
-  assert(
-    calc.abs(determinant) > 1e-12,
-    message: "cannot resolve coordinates through a singular transform",
-  )
-  let (x, y, z) = (
-    point.at(0) - tx,
-    point.at(1) - ty,
-    point.at(2) - tz,
-  )
-  (
-    (
-      (e * i - f * h) * x
-        + (c * h - b * i) * y
-        + (b * f - c * e) * z
-    ) / determinant,
-    (
-      (f * g - d * i) * x
-        + (a * i - c * g) * y
-        + (c * d - a * f) * z
-    ) / determinant,
-    (
-      (d * h - e * g) * x
-        + (b * g - a * h) * y
-        + (a * e - b * d) * z
-    ) / determinant,
-  )
-}
-
-#let _resolve-known-anchor(ctx, coordinate) = {
-  // CeTZ 0.5.2's generic matrix inverse can select more than one pivot per
-  // column. Resolve named nodes through the affine inverse above so anchors
-  // remain continuous as the camera rotates.
-  let target = if type(coordinate) == str {
-    let parts = coordinate.split(".")
-    (
-      name: parts.first(),
-      anchor: if parts.len() == 1 { "default" } else { parts.slice(1) },
-    )
-  } else if type(coordinate) == dictionary and "name" in coordinate {
-    (
-      name: coordinate.name,
-      anchor: coordinate.at("anchor", default: "default"),
-    )
-  } else {
-    none
-  }
-  if target == none or target.name not in ctx.nodes {
-    return coordinate
-  }
-
-  _inverse-transform-point(
-    ctx.transform,
-    (ctx.nodes.at(target.name).anchors)(target.anchor),
-  )
-}
+#import "lighting.typ": (
+  toward-light as _toward-light,
+  face-brightness as _face-brightness,
+  face-visibility as _face-visibility,
+)
+#import "projection.typ": (
+  device-to-cetz as _device-to-cetz,
+  resolve-known-anchor as _resolve-known-anchor,
+  project as _project,
+  face-horizontal as _face-horizontal,
+  project-face-content,
+  face-content-angle as _face-content-angle,
+)
 
 #let _merge-dictionaries(base, overrides) = {
   let merged = base
@@ -77,124 +28,6 @@
     merged.insert(key, value)
   }
   merged
-}
-
-#let _direction(angles) = {
-  let azimuth = angles.at("azimuth", default: 0deg)
-  let elevation = angles.at("elevation", default: 0deg)
-  let horizontal = calc.cos(elevation)
-
-  (
-    calc.sin(azimuth) * horizontal,
-    calc.cos(azimuth) * horizontal,
-    -calc.sin(elevation),
-  )
-}
-
-#let _dot(a, b) = (
-  a.at(0) * b.at(0)
-  + a.at(1) * b.at(1)
-  + a.at(2) * b.at(2)
-)
-
-#let _unit(vector) = {
-  let length = calc.sqrt(_dot(vector, vector))
-  if length == 0 {
-    vector
-  } else {
-    vector.map(component => component / length)
-  }
-}
-
-#let _add(a, b) = (
-  a.at(0) + b.at(0),
-  a.at(1) + b.at(1),
-  a.at(2) + b.at(2),
-)
-
-#let _subtract(a, b) = (
-  a.at(0) - b.at(0),
-  a.at(1) - b.at(1),
-  a.at(2) - b.at(2),
-)
-
-#let _scale(vector, factor) = (
-  vector.at(0) * factor,
-  vector.at(1) * factor,
-  vector.at(2) * factor,
-)
-
-#let _toward-light(light) = _scale(_direction(light), -1)
-
-#let _cross(a, b) = (
-  a.at(1) * b.at(2) - a.at(2) * b.at(1),
-  a.at(2) * b.at(0) - a.at(0) * b.at(2),
-  a.at(0) * b.at(1) - a.at(1) * b.at(0),
-)
-
-#let _clip-polygon(points, distance, epsilon: 1e-6) = {
-  if points.len() == 0 {
-    return ()
-  }
-
-  let result = ()
-  let previous = points.last()
-  let previous-distance = distance(previous)
-  let previous-inside = previous-distance > epsilon
-
-  for current in points {
-    let current-distance = distance(current)
-    let current-inside = current-distance > epsilon
-    if current-inside != previous-inside {
-      let amount = (
-        (epsilon - previous-distance)
-        / (current-distance - previous-distance)
-      )
-      result.push(_add(
-        previous,
-        _scale(_subtract(current, previous), amount),
-      ))
-    }
-    if current-inside {
-      result.push(current)
-    }
-    previous = current
-    previous-distance = current-distance
-    previous-inside = current-inside
-  }
-  result
-}
-
-#let _signed-polygon-area(points) = {
-  if points.len() < 3 {
-    return 0
-  }
-  let twice-area = 0
-  for index in range(points.len()) {
-    let current = points.at(index)
-    let next = points.at(calc.rem(index + 1, points.len()))
-    let cross = current.at(0) * next.at(1) - current.at(1) * next.at(0)
-    twice-area += cross
-  }
-  twice-area / 2
-}
-
-#let _polygon-area(points) = calc.abs(_signed-polygon-area(points))
-
-#let _cross-2d(a, b) = a.at(0) * b.at(1) - a.at(1) * b.at(0)
-
-#let _light-intensity(light) = {
-  let value = light.at("intensity", default: 0.25)
-  let value = if type(value) == ratio {
-    value / 100%
-  } else {
-    value
-  }
-  assert(
-    type(value) in (int, float) and value >= 0 and value <= 1,
-    message: "light intensity must be between 0 and 1",
-  )
-  value
 }
 
 #let _resolve-bevel-value(value, thickness, name) = {
@@ -246,123 +79,6 @@
     message: "bevel is too large for the layer footprint",
   )
   (top: top, bottom: bottom)
-}
-
-#let _face-brightness(normal, shading, light, visibility: 1) = {
-  if shading == "none" {
-    return 1
-  }
-  assert(
-    shading in ("flat", "fancy"),
-    message: "shading must be \"none\", \"flat\", or \"fancy\"",
-  )
-
-  let toward-light = _toward-light(light)
-  let cosine = calc.max(0, _dot(normal, toward-light))
-  let ambient = 1 - _light-intensity(light)
-  let direct = _light-intensity(light) * visibility * cosine
-  ambient + direct
-}
-
-#let _face-basis(face) = {
-  let origin = face.points.first()
-  let u = _unit(_subtract(face.points.at(1), origin))
-  let v = _unit(_cross(face.normal, u))
-  (
-    origin: origin,
-    u: u,
-    v: v,
-  )
-}
-
-#let _to-face-plane(point, basis) = {
-  let relative = _subtract(point, basis.origin)
-  (
-    _dot(relative, basis.u),
-    _dot(relative, basis.v),
-    0,
-  )
-}
-
-#let _shadow-polygons(receiver, receiver-index, faces, toward-light) = {
-  let denominator = _dot(receiver.normal, toward-light)
-  if denominator <= 1e-6 {
-    return ()
-  }
-
-  let basis = _face-basis(receiver)
-  let polygons = ()
-  for (occluder-index, occluder) in faces.enumerate() {
-    if occluder-index != receiver-index {
-      let distance = point => _dot(
-        _subtract(point, basis.origin),
-        receiver.normal,
-      )
-      let clipped = _clip-polygon(occluder.points, distance)
-      if clipped.len() >= 3 {
-        let projected = clipped.map(point => {
-          let amount = distance(point) / denominator
-          _subtract(point, _scale(toward-light, amount))
-        })
-        let local = projected.map(point => _to-face-plane(point, basis))
-        if _signed-polygon-area(local) < 0 {
-          local = local.rev()
-        }
-        if _polygon-area(local) > 1e-8 {
-          polygons.push(local)
-        }
-      }
-    }
-  }
-  polygons
-}
-
-#let _point-in-convex(point, polygon, epsilon: 1e-6) = {
-  for index in range(polygon.len()) {
-    let start = polygon.at(index)
-    let end = polygon.at(calc.rem(index + 1, polygon.len()))
-    if _cross-2d(
-      _subtract(end, start),
-      _subtract(point, start),
-    ) < -epsilon {
-      return false
-    }
-  }
-  true
-}
-
-#let _face-visibility(receiver, receiver-index, faces, shading, light) = {
-  if shading == "none" or _light-intensity(light) == 0 {
-    return 1
-  }
-
-  let toward-light = _toward-light(light)
-  if _dot(receiver.normal, toward-light) <= 1e-6 {
-    return 0
-  }
-  let polygons = _shadow-polygons(
-    receiver,
-    receiver-index,
-    faces,
-    toward-light,
-  )
-  if polygons.len() == 0 {
-    return 1
-  }
-
-  let basis = _face-basis(receiver)
-  let center = receiver.points.map(
-    point => _to-face-plane(point, basis),
-  ).fold(
-    (0, 0, 0),
-    (sum, point) => _add(sum, point),
-  )
-  center = _scale(center, 1 / receiver.points.len())
-  if polygons.any(polygon => _point-in-convex(center, polygon)) {
-    0
-  } else {
-    1
-  }
 }
 
 #let _fade-config(value) = {
@@ -431,139 +147,6 @@
     dash: base.dash,
     miter-limit: base.miter-limit,
   )
-}
-
-#let _project(point, camera) = {
-  let azimuth = camera.at("azimuth", default: 0deg)
-  let elevation = camera.at("elevation", default: 0deg)
-  let (x, y, z) = point
-
-  (
-    calc.cos(azimuth) * x + calc.sin(azimuth) * y,
-    -calc.cos(elevation) * z
-      + calc.sin(elevation)
-        * (calc.sin(azimuth) * x - calc.cos(azimuth) * y),
-  )
-}
-
-#let _face-basis(camera, face) = {
-  let azimuth = camera.at("azimuth", default: 0deg)
-  let elevation = camera.at("elevation", default: 0deg)
-  if face in ("front", "back") {
-    (
-      (
-        calc.cos(azimuth),
-        calc.sin(elevation) * calc.sin(azimuth),
-      ),
-      (0, calc.cos(elevation)),
-    )
-  } else if face == "right" {
-    (
-      (
-        calc.sin(azimuth),
-        -calc.sin(elevation) * calc.cos(azimuth),
-      ),
-      (0, calc.cos(elevation)),
-    )
-  } else if face == "left" {
-    (
-      (
-        -calc.sin(azimuth),
-        calc.sin(elevation) * calc.cos(azimuth),
-      ),
-      (0, calc.cos(elevation)),
-    )
-  } else {
-    (
-      (
-        calc.cos(azimuth),
-        calc.sin(elevation) * calc.sin(azimuth),
-      ),
-      (
-        -calc.sin(azimuth),
-        calc.sin(elevation) * calc.cos(azimuth),
-      ),
-    )
-  }
-}
-
-#let _face-horizontal(camera, face) = _face-basis(camera, face).first()
-
-#let _content-origin(anchor) = {
-  let anchor = if anchor == none { "center" } else { anchor }
-  if anchor == "north-west" {
-    left + top
-  } else if anchor == "north" {
-    center + top
-  } else if anchor == "north-east" {
-    right + top
-  } else if anchor in ("west", "mid-west") {
-    left + horizon
-  } else if anchor in ("center", "mid") {
-    center + horizon
-  } else if anchor in ("east", "mid-east") {
-    right + horizon
-  } else if anchor in ("south-west", "base-west", "text") {
-    left + bottom
-  } else if anchor in ("south", "base") {
-    center + bottom
-  } else if anchor in ("south-east", "base-east") {
-    right + bottom
-  } else {
-    panic("unsupported anchor for projected content: " + repr(anchor))
-  }
-}
-
-#let project-face-content(
-  body,
-  camera,
-  face,
-  anchor: none,
-) = {
-  assert(
-    face in ("front", "back", "left", "right", "top", "bottom"),
-    message: "unknown projection face: " + repr(face),
-  )
-
-  let (u, v) = _face-basis(camera, face)
-  let origin = _content-origin(anchor)
-  let v-length = calc.sqrt(v.at(0) * v.at(0) + v.at(1) * v.at(1))
-  if v-length < 1e-8 {
-    return std.scale(x: 0%, y: 0%, body)
-  }
-
-  let v-unit = (v.at(0) / v-length, v.at(1) / v-length)
-  let x-unit = (v-unit.at(1), -v-unit.at(0))
-  let x-scale = u.at(0) * x-unit.at(0) + u.at(1) * x-unit.at(1)
-  if calc.abs(x-scale) < 1e-8 {
-    return std.scale(x: 0%, y: 0%, body)
-  }
-
-  let shear = (
-    u.at(0) * v-unit.at(0) + u.at(1) * v-unit.at(1)
-  ) / x-scale
-  let rotation = calc.atan2(x-unit.at(0), x-unit.at(1))
-
-  std.rotate(
-    rotation,
-    origin: origin,
-    std.skew(
-      ay: calc.atan2(1, shear),
-      origin: origin,
-      std.scale(
-        x: x-scale * 100%,
-        y: v-length * 100%,
-        origin: origin,
-        body,
-      ),
-    ),
-  )
-}
-
-#let _face-content-angle(camera, face) = {
-  let (horizontal, _) = _face-basis(camera, face)
-  let (horizontal-x, horizontal-y) = horizontal
-  calc.atan2(horizontal-x, horizontal-y)
 }
 
 #let _position-component-valid(value) = {
@@ -673,16 +256,6 @@
   let projected = _project(point, camera)
   (projected.at(0), -projected.at(1), 0)
 }
-
-#let _dot-2d(a, b) = (
-  a.at(0) * b.at(0)
-  + a.at(1) * b.at(1)
-)
-
-#let _center-2d(points) = (
-  points.map(point => point.at(0)).sum() / points.len(),
-  points.map(point => point.at(1)).sum() / points.len(),
-)
 
 #let _fade-geometry(points, camera, start, end) = {
   let heights = points.map(point => point.at(2))

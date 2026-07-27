@@ -1,49 +1,13 @@
 #import "@preview/cetz:0.5.2"
-#import "layer-stack.typ": project-face-content
-
-#let _add(a, b) = (
-  a.at(0) + b.at(0),
-  a.at(1) + b.at(1),
-  a.at(2) + b.at(2),
+#import "geometry.typ": (
+  add as _add,
+  scale as _scale,
+  dot as _dot,
+  cross as _cross,
+  unit as _unit,
 )
-
-#let _scale(vector, factor) = (
-  vector.at(0) * factor,
-  vector.at(1) * factor,
-  vector.at(2) * factor,
-)
-
-#let _dot(a, b) = (
-  a.at(0) * b.at(0)
-  + a.at(1) * b.at(1)
-  + a.at(2) * b.at(2)
-)
-
-#let _cross(a, b) = (
-  a.at(1) * b.at(2) - a.at(2) * b.at(1),
-  a.at(2) * b.at(0) - a.at(0) * b.at(2),
-  a.at(0) * b.at(1) - a.at(1) * b.at(0),
-)
-
-#let _unit(vector) = {
-  let length = calc.sqrt(_dot(vector, vector))
-  if length == 0 {
-    vector
-  } else {
-    vector.map(component => component / length)
-  }
-}
-
-#let _direction(angles) = {
-  let azimuth = angles.at("azimuth", default: 0deg)
-  let elevation = angles.at("elevation", default: 0deg)
-  let horizontal = calc.cos(elevation)
-  (
-    calc.sin(azimuth) * horizontal,
-    calc.cos(azimuth) * horizontal,
-    -calc.sin(elevation),
-  )
-}
+#import "lighting.typ": direction as _direction
+#import "projection.typ": project-face-content
 
 #let _state(ctx) = {
   let state = ctx.shared-state.at("semi", default: none)
