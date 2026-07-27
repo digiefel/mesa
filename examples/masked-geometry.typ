@@ -1,6 +1,4 @@
 #import "../src/kernel.typ" as kernel
-#import "../src/projection.typ": device-to-cetz, ortho-view
-#import "../src/scene.typ" as scene
 #import "../src/lib.typ" as semi
 #import "@preview/cetz:0.5.2": canvas, draw
 
@@ -27,8 +25,6 @@
 #let cut-line = ((0, 2), (10, 4))
 #let view-x = 35deg
 #let view-y = 35deg
-#let view-z = 0deg
-#let view = ortho-view(view-x, view-y, z: view-z)
 
 #let masked-sample = {
   import semi: *
@@ -46,29 +42,6 @@
     mask: result,
   )
 }
-
-#let sample-scene = (
-  (
-    shapes: subject,
-    bottom: -1.5,
-    top: 0,
-    top-fill: rgb("#c6d1d6"),
-    side-fill: rgb("#9fadb4"),
-    section-fill: rgb("#9fadb4"),
-  ),
-  (
-    shapes: result,
-    bottom: 0,
-    top: 1.5,
-    section-fill: rgb("#b8d6ed"),
-  ),
-)
-
-#let cut-scene = scene.cut-line(
-  sample-scene,
-  cut-line,
-  keep: "left",
-)
 
 #let draw-shapes(shapes, fill: none, stroke: black + .5pt) = {
   for shape in shapes {
@@ -130,53 +103,38 @@
 
 #pagebreak()
 
+#semi.debug.topology(
+  masked-sample,
+  size: (10, 6),
+  camera: (
+    azimuth: view-y,
+    elevation: view-x,
+  ),
+  length: 5mm,
+)
+
+#pagebreak()
+
 #align(center)[
-  #grid(
-    columns: 4,
-    gutter: 5mm,
-    [#line(length: 6mm, stroke: scene.topology-debug-styles.outline) outline],
-    [#line(length: 6mm, stroke: scene.topology-debug-styles.material) material],
-    [#line(length: 6mm, stroke: scene.topology-debug-styles.occluded) occluded],
-    [#line(length: 6mm, stroke: scene.topology-debug-styles.internal) internal],
+  #semi.layer-stack(
+    masked-sample,
+    size: (10, 6),
+    section: ((0, section-y), (10, section-y)),
+    length: 5mm,
   )
-  #v(3mm)
-  #canvas(length: 5mm, {
-    draw.ortho(
-      x: view-x,
-      y: view-y,
-      z: view-z,
-      sorted: true,
-      cull-face: none,
-      {
-        draw.transform(device-to-cetz)
-        scene.render-topology-debug(sample-scene, view: view)
-      },
-    )
-  })
 ]
 
 #pagebreak()
 
 #align(center)[
-  #canvas(length: 5mm, {
-    scene.render-section(sample-scene, section-y)
-  })
-]
-
-#pagebreak()
-
-#align(center)[
-  #canvas(length: 5mm, {
-    draw.ortho(
-      x: view-x,
-      y: view-y,
-      z: view-z,
-      sorted: true,
-      cull-face: none,
-      {
-        draw.transform(device-to-cetz)
-        scene.render(cut-scene, view: view)
-      },
-    )
-  })
+  #semi.layer-stack(
+    masked-sample,
+    size: (10, 6),
+    camera: (
+      azimuth: view-y,
+      elevation: view-x,
+    ),
+    cut: cut-line,
+    length: 5mm,
+  )
 ]

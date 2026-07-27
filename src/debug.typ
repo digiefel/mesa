@@ -8,6 +8,28 @@
 )
 #import "lighting.typ": direction as _direction
 #import "projection.typ": project-face-content
+#import "layer-stack.typ": layer-stack as _layer-stack
+#import "scene.typ": topology-debug-styles as _topology-debug-styles
+
+/// Render a complete topology diagnostic for a layer stack.
+#let topology(body, ..options) = {
+  let options = options.named()
+  assert("debug" not in options, message: "topology debug controls the debug mode")
+  align(center)[
+    #text(size: 7pt)[
+      #grid(
+        columns: 4,
+        gutter: 3mm,
+        [#line(length: 4mm, stroke: _topology-debug-styles.outline) outline],
+        [#line(length: 4mm, stroke: _topology-debug-styles.material) material],
+        [#line(length: 4mm, stroke: _topology-debug-styles.occluded) occluded],
+        [#line(length: 4mm, stroke: _topology-debug-styles.internal) internal],
+      )
+    ]
+    #v(3mm)
+    #_layer-stack(body, debug: "topology", ..options)
+  ]
+}
 
 #let _state(ctx) = {
   let state = ctx.shared-state.at("semi", default: none)

@@ -752,7 +752,44 @@
   })
 }
 
-#let _draw-scene() = {
+#let _cut-config(cut) = {
+  if cut == none {
+    return none
+  }
+  if type(cut) == array {
+    return (plane: cut, keep: "left")
+  }
+  assert(
+    type(cut) == dictionary and "plane" in cut,
+    message: "cut must be a plane or a dictionary with plane and keep",
+  )
+  (
+    plane: cut.plane,
+    keep: cut.at("keep", default: "left"),
+  )
+}
+
+#let _horizontal-section(section) = {
+  assert(
+    type(section) == array and section.len() == 2,
+    message: "section must be a plane",
+  )
+  let (start, end) = section
+  assert(
+    type(start) == array
+      and start.len() == 2
+      and type(end) == array
+      and end.len() == 2,
+    message: "section plane points must be (x, y)",
+  )
+  assert(
+    start.at(1) == end.at(1),
+    message: "only face-parallel sections are supported for now",
+  )
+  start.at(1)
+}
+
+#let _draw-scene(debug: none) = {
   cetz.draw.set-ctx(ctx => {
     let state = ctx.shared-state.semi
     let diagnostics = ()
@@ -803,9 +840,27 @@
 
   cetz.draw.get-ctx(ctx => {
     let state = ctx.shared-state.semi
-    if state.masked {
-      _scene.render(
+    let cut = _cut-config(state.cut)
+    let volumes = if cut == none {
+      state.volumes
+    } else {
+      _scene.cut-line(
         state.volumes,
+        cut.plane,
+        keep: cut.keep,
+      )
+    }
+    if debug == "topology" {
+      _scene.render-topology-debug(
+        volumes,
+        view: _ortho-view(
+          state.camera.at("elevation", default: 0deg),
+          state.camera.at("azimuth", default: 0deg),
+        ),
+      )
+    } else if state.masked {
+      _scene.render(
+        volumes,
         view: _ortho-view(
           state.camera.at("elevation", default: 0deg),
           state.camera.at("azimuth", default: 0deg),
@@ -829,10 +884,19 @@
   })
 }
 
+#let _draw-section(section) = {
+  cetz.draw.get-ctx(ctx => {
+    _scene.render-section(
+      ctx.shared-state.semi.volumes,
+      _horizontal-section(section),
+    )
+  })
+}
+
 #let _draw-outlines() = {
   cetz.draw.get-ctx(ctx => {
     let state = ctx.shared-state.semi
-    if not state.masked {
+    if not state.masked and state.debug != "topology" {
       cetz.draw.on-layer(-0.5, {
         for (index, outline) in state.outlines.enumerate() {
           _draw-beveled-outline(
@@ -1187,6 +1251,10 @@
         top-fill: fill,
         side-fill: fill,
         section-fill: fill,
+        debug-fill: resolved-style.at(
+          "base-color",
+          default: rgb("#b8d6ed"),
+        ),
       ))
       ctx.shared-state.semi.masked = (
         ctx.shared-state.semi.masked
@@ -1240,6 +1308,8 @@
   background: none,
   stroke: none,
   padding: none,
+  cut: none,
+  section: none,
   debug: none,
   canvas-debug: false,
 ) = {
@@ -1251,6 +1321,14 @@
   assert(type(camera) == dictionary, message: "camera must be a dictionary")
   assert(type(light) == dictionary, message: "light must be a dictionary")
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
+  assert(
+    cut == none or section == none,
+    message: "cut and section cannot be used together",
+  )
+  assert(
+    section == none or debug == none,
+    message: "section does not support debug overlays",
+  )
   assert(
     type(canvas-debug) == bool,
     message: "canvas-debug must be a boolean",
@@ -1284,7 +1362,7 @@
           face-diagnostics: (),
           outlines: (),
           volumes: (),
-          masked: false,
+          masked: cut != none,
           face-contents: (),
           layers: (:),
           material-counts: (:),
@@ -1294,30 +1372,42 @@
           bevel: bevel,
           internal-stroke: internal-stroke,
           camera: camera,
+          debug: debug,
+          cut: cut,
         )
         ctx
       })
 
-      cetz.draw.ortho(
-        x: elevation,
-        y: azimuth,
-        sorted: true,
-        cull-face: none,
+      if section == none {
+        cetz.draw.ortho(
+          x: elevation,
+          y: azimuth,
+          sorted: true,
+          cull-face: none,
+          {
+            cetz.draw.transform(_device-to-cetz)
+            cetz.draw.register-coordinate-resolver(_resolve-known-anchor)
+            body
+            _draw-scene(debug: debug)
+            if debug != none and debug != "topology" {
+              cetz.draw.on-layer(2, debug)
+            }
+          },
+        )
+      } else {
         {
-          cetz.draw.transform(_device-to-cetz)
-          cetz.draw.register-coordinate-resolver(_resolve-known-anchor)
           body
-          _draw-scene()
-          if debug != none {
-            cetz.draw.on-layer(2, debug)
-          }
-        },
-      )
+          _draw-section(section)
+        }
+      }
 
-      _draw-outlines()
+      if section == none {
+        _draw-outlines()
+      }
 
-      cetz.draw.on-layer(1, {
-        cetz.draw.get-ctx(ctx => {
+      if section == none and debug != "topology" {
+        cetz.draw.on-layer(1, {
+          cetz.draw.get-ctx(ctx => {
           let label-face = if calc.sin(azimuth) < 0 {
             "back"
           } else {
@@ -1365,8 +1455,9 @@
               },
             )
           }
+          })
         })
-      })
+      }
     },
   )
 }

@@ -173,9 +173,9 @@
     dash: "dashed",
   ),
   internal: (
-    paint: luma(55%),
-    thickness: .35pt,
-    dash: "dotted",
+    paint: black,
+    thickness: .45pt,
+    dash: "dashed",
   ),
 )
 
@@ -184,14 +184,12 @@
   let debug-volumes = volumes.map(volume => {
     let debug-volume = volume
     debug-volume.stroke = none
-    debug-volume.top-fill = volume.at(
-      "top-fill",
+    let debug-fill = volume.at(
+      "debug-fill",
       default: rgb("#b8d6ed"),
     ).transparentize(45%)
-    debug-volume.side-fill = volume.at(
-      "side-fill",
-      default: rgb("#91b4ce"),
-    ).transparentize(45%)
+    debug-volume.top-fill = debug-fill
+    debug-volume.side-fill = debug-fill
     debug-volume
   })
   _render-faces(debug-volumes)
