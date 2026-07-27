@@ -85,6 +85,7 @@ layer(
   label-transform: auto,
   label-position: (center, horizon),
   bevel: auto,
+  internal-stroke: auto,
   ..style,
 )
 ```
@@ -99,6 +100,7 @@ layer(
   Its default, `auto`, inherits the `layer-stack` setting.
 - `label-position` places the label in the face-local `(x, z)` plane.
 - `bevel` overrides the stack's bevel configuration for this layer.
+- `internal-stroke` overrides the stack's bevel-contour stroke.
 - extra named arguments override the selected material style.
 
 ```typ
@@ -215,7 +217,7 @@ layer-stack(
     intensity: 0.25,
   ),
   bevel: (top: 0.5, bottom: 0.25),
-  internal-strokes: false,
+  internal-stroke: none,
   palette: (:),
   label-transform: "project",
   length: .8mm,
@@ -283,9 +285,11 @@ bevel: (top: 8%, bottom: 4%)
 The layer-level `bevel` argument overrides this configuration. A fading
 substrate has no visible bottom edge, so its bottom bevel is suppressed.
 
-`internal-strokes` defaults to `false`: chamfer mesh boundaries are not
-outlined, while the exterior layer outline remains. Set it to `true` to stroke
-every face boundary.
+`stroke` in a material or layer style controls the exterior outline.
+`internal-stroke` independently controls the contours between bevel faces and
+flat faces. It defaults to `none`; `auto` reuses the exterior stroke, and any
+CeTZ stroke value can give these contours a lighter or dashed style. A
+layer-level `internal-stroke` overrides the stack setting.
 
 `label-transform` controls how labels follow the layer face. `"project"`
 applies the face's full orthographic projection, including foreshortening and

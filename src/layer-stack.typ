@@ -619,15 +619,6 @@
   )
 }
 
-#let _softened-stroke(value) = {
-  let base = stroke(value)
-  let paint = if base.paint == auto { black } else { base.paint }
-  if type(paint) != color {
-    return base
-  }
-  _stroke-with-paint(base, paint.transparentize(18%))
-}
-
 #let _draw-faded-outline(points, value, config, camera) = {
   let heights = points.map(point => point.at(2))
   let top = calc.max(..heights)
@@ -691,8 +682,8 @@
     relative: "self",
   )
   cetz.draw.line(
-    high,
-    low,
+    (projected-high.at(0), -projected-high.at(1), 0),
+    (projected-low.at(0), -projected-low.at(1), 0),
     stroke: _stroke-with-paint(base, outline-paint),
   )
 }
@@ -706,12 +697,16 @@
   bottom-bevel,
   style,
   camera,
+  draw-top,
 ) = {
   let value = style.at("stroke", default: 1pt + black)
-  if value == none {
+  let internal-value = style.at("internal-stroke", default: none)
+  if internal-value == auto {
+    internal-value = value
+  }
+  if value == none and internal-value == none {
     return
   }
-  let value = _softened-stroke(value)
   let top-shoulder = top - top-bevel
   let bottom-shoulder = bottom + bottom-bevel
   let outer = (
@@ -738,27 +733,111 @@
   } else {
     _fade-config(fade-bottom)
   }
-
-  cetz.draw.line(..top-ring, close: true, stroke: value)
-  if fade-config == none {
-    cetz.draw.line(..bottom-ring, close: true, stroke: value)
+  let project = point => {
+    let projected = _project(point, camera)
+    (projected.at(0), -projected.at(1), 0)
   }
-  for index in range(4) {
-    let corner = outer.at(index)
-    let lower = (corner.at(0), corner.at(1), bottom-shoulder)
-    let upper = (corner.at(0), corner.at(1), top-shoulder)
+  let azimuth = camera.at("azimuth", default: 0deg)
+  let visible-sides = (
+    if calc.sin(azimuth) < 0 { "back" } else { "front" },
+    if calc.cos(azimuth) < 0 { "left" } else { "right" },
+  )
+  let side-edges = (
+    front: (0, 1),
+    right: (1, 2),
+    back: (2, 3),
+    left: (3, 0),
+  )
+  let visible-edges = ()
+  let visible-corners = ()
+  for side in visible-sides {
+    let horizontal = _face-horizontal(camera, side)
+    let projected-length = calc.sqrt(_dot-2d(horizontal, horizontal))
+    if projected-length > 1e-6 {
+      let edge = side-edges.at(side)
+      visible-edges.push(edge)
+      for corner in edge {
+        if corner not in visible-corners {
+          visible-corners.push(corner)
+        }
+      }
+    }
+  }
+
+  if value != none {
+    if draw-top {
+      cetz.draw.line(..top-ring.map(project), close: true, stroke: value)
+    }
     if fade-config == none {
-      let points = (
-        bottom-ring.at(index),
-        lower,
-        upper,
-        top-ring.at(index),
-      )
-      cetz.draw.line(..points, stroke: value)
-    } else {
-      _draw-faded-edge(upper, lower, value, fade-config, camera)
-      let points = (upper, top-ring.at(index))
-      cetz.draw.line(..points, stroke: value)
+      for edge in visible-edges {
+        cetz.draw.line(
+          project(bottom-ring.at(edge.first())),
+          project(bottom-ring.at(edge.last())),
+          stroke: value,
+        )
+      }
+    }
+    for index in visible-corners {
+      let corner = outer.at(index)
+      let lower = (corner.at(0), corner.at(1), bottom-shoulder)
+      let upper = (corner.at(0), corner.at(1), top-shoulder)
+      if fade-config == none {
+        let points = (
+          bottom-ring.at(index),
+          lower,
+          upper,
+          top-ring.at(index),
+        )
+        cetz.draw.line(..points.map(project), stroke: value)
+      } else {
+        _draw-faded-edge(upper, lower, value, fade-config, camera)
+        let points = (upper, top-ring.at(index))
+        cetz.draw.line(..points.map(project), stroke: value)
+      }
+    }
+  }
+
+  if internal-value != none {
+    for edge in visible-edges {
+      let start = edge.first()
+      let end = edge.last()
+      if top-bevel > 0 {
+        cetz.draw.line(
+          project((
+            outer.at(start).at(0),
+            outer.at(start).at(1),
+            top-shoulder,
+          )),
+          project((
+            outer.at(end).at(0),
+            outer.at(end).at(1),
+            top-shoulder,
+          )),
+          stroke: internal-value,
+        )
+        if not draw-top {
+          cetz.draw.line(
+            project(top-ring.at(start)),
+            project(top-ring.at(end)),
+            stroke: internal-value,
+          )
+        }
+      }
+      if bottom-bevel > 0 {
+        cetz.draw.line(
+          project((
+            outer.at(start).at(0),
+            outer.at(start).at(1),
+            bottom-shoulder,
+          )),
+          project((
+            outer.at(end).at(0),
+            outer.at(end).at(1),
+            bottom-shoulder,
+          )),
+          stroke: internal-value,
+        )
+      }
     }
   }
 }
@@ -870,13 +949,6 @@
     visibility: visibility,
   )
   let outline = style.at("stroke", default: 1pt + black)
-  let outline = if outline == none {
-    none
-  } else if shading == "fancy" {
-    _softened-stroke(outline)
-  } else {
-    outline
-  }
   let fades = fade-bottom != none and normal.at(2) == 0
   let config = if fades { _fade-config(fade-bottom) } else { none }
   let geometry = if fades {
@@ -1029,7 +1101,15 @@
           state.face-diagnostics.at(index).visibility,
         )
       }
-      for outline in state.outlines {
+    })
+  })
+}
+
+#let _draw-outlines() = {
+  cetz.draw.get-ctx(ctx => {
+    let state = ctx.shared-state.semi
+    cetz.draw.on-layer(-0.5, {
+      for (index, outline) in state.outlines.enumerate() {
         _draw-beveled-outline(
           outline.width,
           outline.depth,
@@ -1039,6 +1119,7 @@
           outline.bottom-bevel,
           outline.style,
           outline.camera,
+          index == state.outlines.len() - 1,
         )
       }
     })
@@ -1054,6 +1135,7 @@
   label-transform: auto,
   label-position: (center, horizon),
   bevel: auto,
+  internal-stroke: auto,
   ..style,
 ) = {
   assert(type(name) == str, message: "layer name must be a string")
@@ -1097,6 +1179,14 @@
       style,
       state.palette,
     )
+    resolved-style.insert(
+      "internal-stroke",
+      if internal-stroke == auto {
+        state.internal-stroke
+      } else {
+        internal-stroke
+      },
+    )
     let visual-middle = _automatic-label-z(resolved-style)
     let bevel = if state.shading == "fancy" {
       _bevel-config(
@@ -1114,7 +1204,7 @@
     let top-shoulder = top - top-bevel
     let bottom-shoulder = bottom + bottom-bevel
     let render-style = resolved-style
-    if state.shading == "fancy" and not state.internal-strokes {
+    if state.shading == "fancy" {
       render-style.stroke = none
     }
     let bevel-style = render-style
@@ -1312,7 +1402,7 @@
           state.light,
           state.camera,
         )
-        if state.shading == "fancy" and not state.internal-strokes {
+        if state.shading == "fancy" {
           _queue-beveled-outline(
             width,
             depth,
@@ -1427,7 +1517,7 @@
     intensity: 0.25,
   ),
   bevel: (top: 0.5, bottom: 0.25),
-  internal-strokes: false,
+  internal-stroke: none,
   palette: (:),
   label-transform: "project",
   length: .8mm,
@@ -1445,10 +1535,6 @@
   assert(size.all(value => value > 0), message: "size values must be positive")
   assert(type(camera) == dictionary, message: "camera must be a dictionary")
   assert(type(light) == dictionary, message: "light must be a dictionary")
-  assert(
-    type(internal-strokes) == bool,
-    message: "internal-strokes must be a boolean",
-  )
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
   assert(
     type(canvas-debug) == bool,
@@ -1489,7 +1575,7 @@
           shading: shading,
           light: light,
           bevel: bevel,
-          internal-strokes: internal-strokes,
+          internal-stroke: internal-stroke,
           camera: camera,
         )
         ctx
@@ -1509,6 +1595,8 @@
           }
         },
       )
+
+      _draw-outlines()
 
       cetz.draw.on-layer(1, {
         cetz.draw.get-ctx(ctx => {
