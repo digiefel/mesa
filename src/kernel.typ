@@ -134,13 +134,14 @@
   _decode-shapes(result.shapes)
 }
 
-#let scene-topology(volumes, view) = {
+#let scene-topology(volumes, view, smooth-join-cosine: 1.0) = {
   let result = cbor(geometry-kernel.scene_topology(cbor.encode((
     version: protocol-version,
     volumes: volumes.enumerate().map(
       ((index, volume)) => _encode-volume(volume, index),
     ),
     view: view,
+    smooth-join-cosine: smooth-join-cosine,
   ))))
   assert.eq(result.version, protocol-version)
   result.edges.map(edge => (

@@ -143,9 +143,19 @@
   }
 }
 
-#let _render-edges(volumes, view, styles, render-edge: none) = {
+#let _render-edges(
+  volumes,
+  view,
+  styles,
+  crease-angle: 0deg,
+  render-edge: none,
+) = {
   draw.on-layer(100, {
-    for edge in kernel.scene-topology(volumes, view) {
+    for edge in kernel.scene-topology(
+      volumes,
+      view,
+      smooth-join-cosine: calc.cos(crease-angle),
+    ) {
       let role = _normal-edge-role(edge)
       if role != none {
         if render-edge == none {
@@ -166,12 +176,19 @@
   volumes,
   view: none,
   styles: edge-styles,
+  crease-angle: 0deg,
   render-face: none,
   render-edge: none,
 ) = {
   assert(view != none, message: "3D scene rendering requires a view")
   _render-faces(volumes, view, render-face: render-face)
-  _render-edges(volumes, view, styles, render-edge: render-edge)
+  _render-edges(
+    volumes,
+    view,
+    styles,
+    crease-angle: crease-angle,
+    render-edge: render-edge,
+  )
 }
 
 #let render-section(volumes, y) = {
@@ -254,7 +271,11 @@
   ),
 )
 
-#let render-topology-debug(volumes, view: none) = {
+#let render-topology-debug(
+  volumes,
+  view: none,
+  crease-angle: 0deg,
+) = {
   assert(view != none, message: "topology debug rendering requires a view")
   let debug-volumes = volumes.map(volume => {
     let debug-volume = volume
@@ -270,7 +291,11 @@
   _render-faces(debug-volumes, view)
 
   draw.on-layer(100, {
-    for edge in kernel.scene-topology(volumes, view) {
+    for edge in kernel.scene-topology(
+      volumes,
+      view,
+      smooth-join-cosine: calc.cos(crease-angle),
+    ) {
       let role = if edge.visibility == "occluded" {
         "occluded"
       } else if edge.kind == "material" {

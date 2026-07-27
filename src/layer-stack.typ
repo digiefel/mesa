@@ -957,6 +957,7 @@
           state.camera.at("elevation", default: 0deg),
           state.camera.at("azimuth", default: 0deg),
         ),
+        crease-angle: state.crease-angle,
       )
     } else if state.masked {
       _scene.render(
@@ -965,6 +966,7 @@
           state.camera.at("elevation", default: 0deg),
           state.camera.at("azimuth", default: 0deg),
         ),
+        crease-angle: state.crease-angle,
         render-face: _render-scene-face,
         render-edge: _render-scene-edge,
       )
@@ -1487,6 +1489,7 @@
   ),
   bevel: (top: 0.5, bottom: 0.25),
   internal-stroke: none,
+  crease-angle: 0deg,
   palette: (:),
   length: .8mm,
   baseline: none,
@@ -1506,6 +1509,12 @@
   assert(type(camera) == dictionary, message: "camera must be a dictionary")
   assert(type(light) == dictionary, message: "light must be a dictionary")
   assert(type(palette) == dictionary, message: "palette must be a dictionary")
+  assert(
+    type(crease-angle) == angle
+      and crease-angle >= 0deg
+      and crease-angle <= 90deg,
+    message: "crease-angle must be between 0deg and 90deg",
+  )
   assert(
     cut == none or section == none,
     message: "cut and section cannot be used together",
@@ -1552,6 +1561,7 @@
           light: light,
           bevel: bevel,
           internal-stroke: internal-stroke,
+          crease-angle: crease-angle,
           camera: camera,
           debug: debug,
           cut: cut,

@@ -137,9 +137,12 @@ pub(crate) fn validate_volumes(volumes: &[WireVolume]) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn scene_geometry(volumes: &[WireVolume]) -> (Vec<Face>, Vec<AtomicEdge>) {
+pub(crate) fn scene_geometry_with_smooth_join_cosine(
+    volumes: &[WireVolume],
+    smooth_join_cosine: f64,
+) -> (Vec<Face>, Vec<AtomicEdge>) {
     let faces = scene_faces(volumes);
-    let edges = atomic_edges(&faces);
+    let edges = atomic_edges(&faces, smooth_join_cosine);
     (faces, edges)
 }
 
@@ -691,7 +694,7 @@ fn uncovered_intervals(
     result
 }
 
-fn atomic_edges(faces: &[Face]) -> Vec<AtomicEdge> {
+fn atomic_edges(faces: &[Face], smooth_join_cosine: f64) -> Vec<AtomicEdge> {
     let mut lines: BTreeMap<LineKey, LineSegments> = BTreeMap::new();
 
     for (face, surface) in faces.iter().enumerate() {
@@ -726,7 +729,7 @@ fn atomic_edges(faces: &[Face]) -> Vec<AtomicEdge> {
             if incident.is_empty() {
                 continue;
             }
-            let kind = classify_edge(faces, &incident);
+            let kind = classify_edge(faces, &incident, smooth_join_cosine);
             let interior = line.intervals.iter().any(|interval| {
                 interval.start <= start && end <= interval.end && interval.interior
             });
@@ -757,7 +760,11 @@ fn face_segments(face: &Face) -> impl Iterator<Item = Segment> + '_ {
         })
 }
 
-fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
+fn classify_edge(
+    faces: &[Face],
+    incident: &BTreeSet<usize>,
+    smooth_join_cosine: f64,
+) -> EdgeKind {
     if incident.len() == 1 {
         return EdgeKind::Boundary;
     }
@@ -781,13 +788,29 @@ fn classify_edge(faces: &[Face], incident: &BTreeSet<usize>) -> EdgeKind {
 
     for (index, face) in incident.iter().enumerate() {
         for other in incident.iter().skip(index + 1) {
-            if cross_wide(face.normal, other.normal) != [0, 0, 0] {
+            if cross_wide(face.normal, other.normal) != [0, 0, 0]
+                && !normals_form_smooth_join(
+                    face.normal,
+                    other.normal,
+                    smooth_join_cosine,
+                )
+            {
                 return EdgeKind::Crease;
             }
         }
     }
 
     EdgeKind::Smooth
+}
+
+fn normals_form_smooth_join(left: Point3, right: Point3, minimum_cosine: f64) -> bool {
+    let dot = dot_wide(left, right) as f64;
+    if dot <= 0.0 {
+        return false;
+    }
+    let left_length = (dot_wide(left, left) as f64).sqrt();
+    let right_length = (dot_wide(right, right) as f64).sqrt();
+    dot >= minimum_cosine * left_length * right_length
 }
 
 fn line_coordinates(segment: Segment) -> Option<LineCoordinates> {
@@ -968,12 +991,48 @@ mod tests {
             },
         ];
 
-        let edges = atomic_edges(&faces);
+        let edges = atomic_edges(&faces, 1.0);
         assert_eq!(edges.len(), 3);
         assert_eq!(edges[0].kind, EdgeKind::Material);
         assert_eq!(edges[1].kind, EdgeKind::Crease);
         assert_eq!(edges[2].kind, EdgeKind::Material);
         assert!(edges.iter().all(|edge| edge.incident.len() == 2));
+    }
+
+    #[test]
+    fn treats_shallow_polygon_joins_as_smooth_curves() {
+        let face = |normal| Face {
+            normal,
+            material: 0,
+            interior: false,
+            contours: Vec::new(),
+        };
+        let incident = BTreeSet::from([0, 1]);
+
+        assert_eq!(
+            classify_edge(
+                &[face([0, -1000, 0]), face([342, -940, 0])],
+                &incident,
+                1.0,
+            ),
+            EdgeKind::Crease,
+        );
+        assert_eq!(
+            classify_edge(
+                &[face([0, -1000, 0]), face([342, -940, 0])],
+                &incident,
+                30.0_f64.to_radians().cos(),
+            ),
+            EdgeKind::Smooth,
+        );
+        assert_eq!(
+            classify_edge(
+                &[face([0, -1000, 0]), face([707, -707, 0])],
+                &incident,
+                30.0_f64.to_radians().cos(),
+            ),
+            EdgeKind::Crease,
+        );
     }
 
     #[test]
@@ -1000,7 +1059,7 @@ mod tests {
             },
         ];
 
-        let (_, edges) = scene_geometry(&volumes);
+        let (_, edges) = scene_geometry_with_smooth_join_cosine(&volumes, 1.0);
         assert_eq!(
             edge_kind(&edges, [0, 0, -1500], [0, 0, 0]),
             Some(EdgeKind::Crease)
@@ -1101,7 +1160,7 @@ mod tests {
             top_bevel: 1_000,
         }];
 
-        let (faces, edges) = scene_geometry(&volumes);
+        let (faces, edges) = scene_geometry_with_smooth_join_cosine(&volumes, 1.0);
         let bevel_faces: Vec<&Face> = faces
             .iter()
             .filter(|face| face.normal[2] != 0 && (face.normal[0] != 0 || face.normal[1] != 0))

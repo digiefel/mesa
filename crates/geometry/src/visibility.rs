@@ -5,7 +5,9 @@ use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::i_shape::int::shape::IntShapes;
 use serde::Serialize;
 
-use crate::topology::{AtomicEdge, EdgeKind, Face, Point3, WireVolume, scene_geometry};
+use crate::topology::{
+    AtomicEdge, EdgeKind, Face, Point3, WireVolume, scene_geometry_with_smooth_join_cosine,
+};
 
 const EPSILON: f64 = 1e-9;
 const SURFACE_SCALE: f64 = 1000.0;
@@ -72,8 +74,13 @@ pub(crate) fn validate_view(view: ViewMatrix) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn scene_edges(volumes: &[WireVolume], view: ViewMatrix) -> Vec<WireEdge> {
-    let (faces, edges) = scene_geometry(volumes);
+pub(crate) fn scene_edges(
+    volumes: &[WireVolume],
+    view: ViewMatrix,
+    smooth_join_cosine: f64,
+) -> Vec<WireEdge> {
+    let (faces, edges) =
+        scene_geometry_with_smooth_join_cosine(volumes, smooth_join_cosine);
     let projected_faces: Vec<ProjectedFace> = faces
         .iter()
         .map(|face| ProjectedFace::new(face, view))
@@ -572,6 +579,7 @@ mod tests {
         let edges = scene_edges(
             &volumes,
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            1.0,
         );
         let mut edge = edges
             .iter()
@@ -624,7 +632,7 @@ mod tests {
             },
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());
-        let edges = scene_edges(&volumes, view);
+        let edges = scene_edges(&volumes, view, 1.0);
 
         assert_eq!(
             visibility_of(&edges, [0.0, 0.0, -1_500.0], [0.0, 0.0, 0.0]),

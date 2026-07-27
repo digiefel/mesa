@@ -2,15 +2,24 @@
 
 /// Read boundary polygons and width-aware paths from a named GDS cell.
 ///
-/// `path-tolerance` optionally simplifies the path centreline in nanometres
-/// before generating its two offset rails. Zero preserves every path vertex.
+/// `path-tolerance` optionally simplifies the path centreline by a fraction of
+/// that path's width before generating its two offset rails. For example, `2%`
+/// limits the centreline deviation to two percent of the path width. Zero
+/// preserves every path vertex.
 #let gds(data, cell: none, layers: none, path-tolerance: 0) = {
   assert(type(data) == bytes, message: "gds data must be bytes")
   assert(type(cell) == str, message: "gds cell must be a string")
   assert(type(layers) == dictionary, message: "gds layers must be a dictionary")
+  let path-tolerance = if type(path-tolerance) == ratio {
+    path-tolerance / 100%
+  } else {
+    path-tolerance
+  }
   assert(
-    type(path-tolerance) in (int, float) and path-tolerance >= 0,
-    message: "gds path-tolerance must be a non-negative number",
+    type(path-tolerance) in (int, float)
+      and path-tolerance >= 0
+      and path-tolerance <= 1,
+    message: "gds path-tolerance must be between 0% and 100%",
   )
   for (name, layer) in layers {
     assert(

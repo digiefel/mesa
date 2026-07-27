@@ -90,9 +90,11 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
             request.cell
         ));
     }
-    if !request.path_tolerance.is_finite() || request.path_tolerance < 0.0 {
+    if !request.path_tolerance.is_finite()
+        || !(0.0..=1.0).contains(&request.path_tolerance)
+    {
         return Err(format!(
-            "GDS path tolerance must be a finite non-negative number; got {}",
+            "GDS path tolerance must be a fraction between 0 and 1; got {}",
             request.path_tolerance,
         ));
     }
@@ -104,7 +106,6 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         .collect::<BTreeMap<_, _>>();
     let mut bounds: Option<[f64; 4]> = None;
     let nanometers_per_database_unit = library.units.db_unit() / 1e-9;
-    let path_tolerance = request.path_tolerance / nanometers_per_database_unit;
 
     for element in &cell.elems {
         let (layer, datatype) = match element {
@@ -131,7 +132,7 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
                 }
                 vec![vec![contour]]
             }
-            GdsElement::GdsPath(path) => path_to_shapes(path, path_tolerance)?,
+            GdsElement::GdsPath(path) => path_to_shapes(path, request.path_tolerance)?,
             _ => unreachable!("element was checked above"),
         };
 
@@ -185,7 +186,10 @@ fn update_bounds(bounds: &mut Option<[f64; 4]>, contour: &GdsContour) {
     }
 }
 
-fn path_to_shapes(path: &gds21::GdsPath, tolerance: f64) -> Result<GdsShapes, String> {
+fn path_to_shapes(
+    path: &gds21::GdsPath,
+    relative_tolerance: f64,
+) -> Result<GdsShapes, String> {
     let width = path.width.ok_or_else(|| {
         format!(
             "GDS path on layer {}/{} has no width and cannot become an area mask",
@@ -207,7 +211,7 @@ fn path_to_shapes(path: &gds21::GdsPath, tolerance: f64) -> Result<GdsShapes, St
             path.layer, path.datatype,
         ));
     }
-    let mut points = simplify_polyline(points, tolerance);
+    let mut points = simplify_polyline(points, width as f64 * relative_tolerance);
 
     let half_width = width as f64 / 2.0;
     let (start_extension, end_extension, round_ends) = match path.path_type.unwrap_or(0) {
@@ -585,11 +589,27 @@ mod tests {
     }
 
     #[test]
-    fn simplifies_the_centreline_with_a_bounded_tolerance() {
+    fn simplifies_the_centreline_relative_to_path_width() {
         let path = path(1, 0, 4, &[(0, 0), (5, 1), (10, 0), (15, -1), (20, 0)]);
 
         assert_eq!(path_to_shapes(&path, 0.0).unwrap()[0][0].len(), 10);
-        assert_eq!(path_to_shapes(&path, 1.5).unwrap()[0][0].len(), 4);
+        assert_eq!(path_to_shapes(&path, 0.375).unwrap()[0][0].len(), 4);
+    }
+
+    #[test]
+    fn relative_tolerance_is_scale_independent() {
+        let narrow = path(1, 0, 4, &[(0, 0), (5, 1), (10, 0), (15, -1), (20, 0)]);
+        let wide = path(
+            1,
+            0,
+            40,
+            &[(0, 0), (50, 10), (100, 0), (150, -10), (200, 0)],
+        );
+
+        assert_eq!(
+            path_to_shapes(&narrow, 0.2).unwrap()[0][0].len(),
+            path_to_shapes(&wide, 0.2).unwrap()[0][0].len(),
+        );
     }
 
     #[test]

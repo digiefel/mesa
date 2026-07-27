@@ -77,6 +77,8 @@ struct SceneTopologyRequest {
     version: u8,
     volumes: Vec<topology::WireVolume>,
     view: visibility::ViewMatrix,
+    #[serde(rename = "smooth-join-cosine")]
+    smooth_join_cosine: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,7 +295,19 @@ pub fn scene_topology(input: &[u8]) -> Result<Vec<u8>, String> {
 
     topology::validate_volumes(&request.volumes)?;
     visibility::validate_view(request.view)?;
-    let edges = visibility::scene_edges(&request.volumes, request.view);
+    if !request.smooth_join_cosine.is_finite()
+        || !(0.0..=1.0).contains(&request.smooth_join_cosine)
+    {
+        return Err(format!(
+            "smooth join cosine must be between 0 and 1; got {}",
+            request.smooth_join_cosine,
+        ));
+    }
+    let edges = visibility::scene_edges(
+        &request.volumes,
+        request.view,
+        request.smooth_join_cosine,
+    );
 
     let mut output = Vec::new();
     ciborium::into_writer(
