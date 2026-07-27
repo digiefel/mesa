@@ -60,3 +60,26 @@
   }
 }
 
+#let render-section(slabs, y) = {
+  for (index, slab) in slabs.enumerate() {
+    _validate(slab, index)
+  }
+
+  for slab in slabs.sorted(key: slab => slab.bottom) {
+    let intervals = kernel.cross-section(slab.shapes, y)
+    for interval in intervals {
+      draw.rect(
+        (interval.first(), slab.bottom),
+        (interval.last(), slab.top),
+        fill: slab.at(
+          "section-fill",
+          default: slab.at("side-fill", default: rgb("#91b4ce")),
+        ),
+        stroke: slab.at(
+          "stroke",
+          default: rgb("#263843") + .5pt,
+        ),
+      )
+    }
+  }
+}

@@ -23,8 +23,6 @@
 
 #let result = kernel.difference(subject, mask)
 #let cut-y = 2
-#let substrate-section = kernel.cross-section(subject, cut-y)
-#let result-section = kernel.cross-section(result, cut-y)
 
 #let scene = (
   (
@@ -33,11 +31,13 @@
     top: 0,
     top-fill: rgb("#c6d1d6"),
     side-fill: rgb("#9fadb4"),
+    section-fill: rgb("#9fadb4"),
   ),
   (
     shapes: result,
     bottom: 0,
     top: 1.5,
+    section-fill: rgb("#b8d6ed"),
   ),
 )
 
@@ -107,21 +107,6 @@
 
 #align(center)[
   #canvas(length: 5mm, {
-    for interval in substrate-section {
-      draw.rect(
-        (interval.first(), -1.5),
-        (interval.last(), 0),
-        fill: rgb("#9fadb4"),
-        stroke: rgb("#263843") + .5pt,
-      )
-    }
-    for interval in result-section {
-      draw.rect(
-        (interval.first(), 0),
-        (interval.last(), 1.5),
-        fill: rgb("#b8d6ed"),
-        stroke: rgb("#263843") + .5pt,
-      )
-    }
+    slab.render-section(scene, cut-y)
   })
 ]
