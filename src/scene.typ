@@ -129,6 +129,18 @@
   internal: rgb("#49606e") + .3pt,
 )
 
+#let _round-capped-stroke(value) = {
+  let base = stroke(value)
+  stroke(
+    paint: base.paint,
+    thickness: base.thickness,
+    cap: "round",
+    join: base.join,
+    dash: base.dash,
+    miter-limit: base.miter-limit,
+  )
+}
+
 #let _normal-edge-role(edge) = {
   if edge.visibility == "occluded" or edge.kind == "smooth" {
     none
@@ -158,14 +170,15 @@
     ) {
       let role = _normal-edge-role(edge)
       if role != none {
+        let value = _round-capped-stroke(styles.at(role))
         if render-edge == none {
           draw.line(
             edge.start,
             edge.end,
-            stroke: styles.at(role),
+            stroke: value,
           )
         } else {
-          render-edge(edge, volumes, styles.at(role))
+          render-edge(edge, volumes, value)
         }
       }
     }
