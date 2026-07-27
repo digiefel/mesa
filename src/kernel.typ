@@ -134,6 +134,7 @@
     interior: edge.interior,
     visibility: edge.visibility,
     faces: edge.faces,
+    materials: edge.materials,
   ))
 }
 

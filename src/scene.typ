@@ -94,24 +94,31 @@
   result
 }
 
-#let _render-faces(volumes, view) = {
+#let _render-faces(volumes, view, render-face: none) = {
   for (index, volume) in volumes.enumerate() {
     _validate-volume(volume, index)
   }
 
-  for face in kernel.scene-surfaces(volumes, view) {
+  let faces = kernel.scene-surfaces(volumes, view)
+  for (index, face) in faces.enumerate() {
     if face.normal.at(2) >= 0 {
       let volume = volumes.at(face.material)
-      let fill = if face.normal.at(2) > 0 {
-        volume.at("top-fill", default: rgb("#b8d6ed"))
-      } else {
-        volume.at("side-fill", default: rgb("#91b4ce"))
-      }
-      draw.compound-path({
-        for contour in face.contours {
-          draw.line(..contour, close: true)
+      draw.on-layer(-1 + index / (faces.len() + 1), {
+        if render-face == none {
+          let fill = if face.normal.at(2) > 0 {
+            volume.at("top-fill", default: rgb("#b8d6ed"))
+          } else {
+            volume.at("side-fill", default: rgb("#91b4ce"))
+          }
+          draw.compound-path({
+            for contour in face.contours {
+              draw.line(..contour, close: true)
+            }
+          }, fill: fill, fill-rule: "even-odd", stroke: none)
+        } else {
+          render-face(face, volume)
         }
-      }, fill: fill, fill-rule: "even-odd", stroke: none)
+      })
     }
   }
 }
@@ -134,25 +141,35 @@
   }
 }
 
-#let _render-edges(volumes, view, styles) = {
+#let _render-edges(volumes, view, styles, render-edge: none) = {
   draw.on-layer(100, {
     for edge in kernel.scene-topology(volumes, view) {
       let role = _normal-edge-role(edge)
       if role != none {
-        draw.line(
-          edge.start,
-          edge.end,
-          stroke: styles.at(role),
-        )
+        if render-edge == none {
+          draw.line(
+            edge.start,
+            edge.end,
+            stroke: styles.at(role),
+          )
+        } else {
+          render-edge(edge, volumes, styles.at(role))
+        }
       }
     }
   })
 }
 
-#let render(volumes, view: none, styles: edge-styles) = {
+#let render(
+  volumes,
+  view: none,
+  styles: edge-styles,
+  render-face: none,
+  render-edge: none,
+) = {
   assert(view != none, message: "3D scene rendering requires a view")
-  _render-faces(volumes, view)
-  _render-edges(volumes, view, styles)
+  _render-faces(volumes, view, render-face: render-face)
+  _render-edges(volumes, view, styles, render-edge: render-edge)
 }
 
 #let render-section(volumes, y) = {

@@ -29,6 +29,7 @@ pub(crate) struct WireEdge {
     pub(crate) interior: bool,
     pub(crate) visibility: EdgeVisibility,
     pub(crate) faces: u32,
+    pub(crate) materials: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,6 +45,7 @@ struct ProjectedFace {
     constant: f64,
     low: Point2,
     high: Point2,
+    material: u32,
 }
 
 pub(crate) fn validate_view(view: ViewMatrix) -> Result<(), String> {
@@ -103,15 +105,28 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
             let mut overlay =
                 Overlay::with_shapes(&visible, &projected_shapes[other_index]);
             let overlap = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
-            if overlap.is_empty() || !surface_is_in_front(other, &projected[index], &overlap) {
+            if overlap.is_empty() {
                 continue;
             }
-            let mut overlay =
-                Overlay::with_shapes(&visible, &projected_shapes[other_index]);
-            visible = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+            let occluded = nearer_overlap(other, &projected[index], &overlap);
+            if !occluded.is_empty() {
+                let mut overlay = Overlay::with_shapes(&visible, &occluded);
+                visible = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+            }
         }
 
         for shape in visible {
+            let depth = shape
+                .iter()
+                .flatten()
+                .filter_map(|point| {
+                    projected[index].depth_at([
+                        point.x as f64 / SURFACE_SCALE,
+                        point.y as f64 / SURFACE_SCALE,
+                    ])
+                })
+                .sum::<f64>()
+                / shape.iter().map(Vec::len).sum::<usize>() as f64;
             let contours = shape
                 .into_iter()
                 .map(|contour| {
@@ -131,14 +146,18 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
                         .collect()
                 })
                 .collect();
-            result.push(WireSurface {
-                normal: face.normal,
-                material: face.material,
-                contours,
-            });
+            result.push((
+                depth,
+                WireSurface {
+                    normal: face.normal,
+                    material: face.material,
+                    contours,
+                },
+            ));
         }
     }
-    result
+    result.sort_by(|left, right| left.0.total_cmp(&right.0));
+    result.into_iter().map(|(_, surface)| surface).collect()
 }
 
 fn projected_to_int_shapes(contours: &[Vec<Point2>]) -> IntShapes<i64> {
@@ -160,29 +179,66 @@ fn projected_to_int_shapes(contours: &[Vec<Point2>]) -> IntShapes<i64> {
     ]
 }
 
-fn surface_is_in_front(
+fn nearer_overlap(
     candidate: &ProjectedFace,
     surface: &ProjectedFace,
     overlap: &IntShapes<i64>,
-) -> bool {
-    let mut in_front = false;
-    let mut behind = false;
-    for point in overlap.iter().flatten().flatten() {
-        let screen = [
-            point.x as f64 / SURFACE_SCALE,
-            point.y as f64 / SURFACE_SCALE,
-        ];
-        let (Some(candidate_depth), Some(surface_depth)) =
-            (candidate.depth_at(screen), surface.depth_at(screen))
-        else {
-            continue;
+) -> IntShapes<i64> {
+    let (Some(candidate_depth), Some(surface_depth)) =
+        (candidate.depth_coefficients(), surface.depth_coefficients())
+    else {
+        return Vec::new();
+    };
+    let coefficients = [
+        candidate_depth[0] - surface_depth[0],
+        candidate_depth[1] - surface_depth[1],
+        candidate_depth[2] - surface_depth[2],
+    ];
+    let gradient_length = coefficients[0].hypot(coefficients[1]);
+    if gradient_length <= EPSILON {
+        return if coefficients[2] > EPSILON {
+            overlap.clone()
+        } else {
+            Vec::new()
         };
-        let scale = candidate_depth.abs().max(surface_depth.abs()).max(1.0);
-        let difference = candidate_depth - surface_depth;
-        in_front |= difference > EPSILON * scale;
-        behind |= difference < -EPSILON * scale;
     }
-    in_front && !behind
+
+    let normal = [
+        coefficients[0] / gradient_length,
+        coefficients[1] / gradient_length,
+    ];
+    let tangent = [normal[1], -normal[0]];
+    let line_origin = [
+        -coefficients[2] * coefficients[0] / gradient_length.powi(2),
+        -coefficients[2] * coefficients[1] / gradient_length.powi(2),
+    ];
+    let radius = overlap
+        .iter()
+        .flatten()
+        .flatten()
+        .map(|point| {
+            let x = point.x as f64 / SURFACE_SCALE - line_origin[0];
+            let y = point.y as f64 / SURFACE_SCALE - line_origin[1];
+            x.hypot(y)
+        })
+        .fold(1.0_f64, f64::max)
+        * 4.0;
+    let point = |along: f64, across: f64| {
+        IntPoint::new(
+            ((line_origin[0] + tangent[0] * along + normal[0] * across) * SURFACE_SCALE)
+                .round() as i64,
+            ((line_origin[1] + tangent[1] * along + normal[1] * across) * SURFACE_SCALE)
+                .round() as i64,
+        )
+    };
+    let positive_half_plane = vec![vec![vec![
+        point(-radius, 0.0),
+        point(radius, 0.0),
+        point(radius, radius * 2.0),
+        point(-radius, radius * 2.0),
+    ]]];
+    let mut overlay = Overlay::with_shapes(overlap, &positive_half_plane);
+    overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd)
 }
 
 fn inverse_transform_point(point: Point3F, view: ViewMatrix) -> Point3 {
@@ -231,6 +287,7 @@ impl ProjectedFace {
             constant,
             low,
             high,
+            material: face.material,
         }
     }
 
@@ -242,6 +299,17 @@ impl ProjectedFace {
             (self.constant - self.normal[0] * point[0] - self.normal[1] * point[1])
                 / self.normal[2],
         )
+    }
+
+    fn depth_coefficients(&self) -> Option<[f64; 3]> {
+        if self.normal[2].abs() <= EPSILON {
+            return None;
+        }
+        Some([
+            -self.normal[0] / self.normal[2],
+            -self.normal[1] / self.normal[2],
+            self.constant / self.normal[2],
+        ])
     }
 
     fn contains(&self, point: Point2) -> bool {
@@ -329,6 +397,13 @@ fn split_by_visibility(
             interior: edge.interior,
             visibility,
             faces: edge.incident.len() as u32,
+            materials: edge
+                .incident
+                .iter()
+                .map(|face| faces[*face].material)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         };
         if let Some(previous) = result.last_mut()
             && previous.visibility == segment.visibility
@@ -606,25 +681,32 @@ mod tests {
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());
         let surfaces = scene_surfaces(&volumes, view);
-        let oxide = projected_surface_shapes(&surfaces, 1, [0, 0, 1], view);
-        let contacts = projected_surface_shapes(&surfaces, 2, [0, 0, 1], view);
+        let oxide = projected_surface_shapes(&surfaces, view, |surface| {
+            surface.material == 1 && surface.normal == [0, 0, 1]
+        });
+        let contacts = projected_surface_shapes(&surfaces, view, |surface| {
+            surface.material == 2 && surface.normal == [0, 0, 1]
+        });
         let mut overlay = Overlay::with_shapes(&oxide, &contacts);
         let overlap = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
 
         assert!(shape_area2(&overlap) * 10_000 < shape_area2(&contacts));
+
+        let contact_sides = projected_surface_shapes(&surfaces, view, |surface| {
+            surface.material == 2 && surface.normal[2] == 0
+        });
+        let mut overlay = Overlay::with_shapes(&oxide, &contact_sides);
+        let overlap = overlay.overlay(OverlayRule::Intersect, FillRule::EvenOdd);
+        assert!(shape_area2(&overlap) * 10_000 < shape_area2(&contact_sides));
     }
 
     fn projected_surface_shapes(
         surfaces: &[WireSurface],
-        material: u32,
-        normal: Point3,
         view: ViewMatrix,
+        include: impl Fn(&WireSurface) -> bool,
     ) -> IntShapes<i64> {
         let mut result = Vec::new();
-        for surface in surfaces
-            .iter()
-            .filter(|surface| surface.material == material && surface.normal == normal)
-        {
+        for surface in surfaces.iter().filter(|surface| include(surface)) {
             let contours: Vec<Vec<Point2>> = surface
                 .contours
                 .iter()

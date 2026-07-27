@@ -281,9 +281,38 @@
   )
   let top-center = _center-2d(projected-top)
   let bottom-center = _center-2d(projected-bottom)
+  let horizontal = none
+  for first in points {
+    for second in points {
+      let difference = (
+        second.at(0) - first.at(0),
+        second.at(1) - first.at(1),
+      )
+      if (
+        horizontal == none
+        and calc.abs(difference.at(0)) + calc.abs(difference.at(1)) > .000001
+      ) {
+        horizontal = (first, difference)
+      }
+    }
+  }
+  if horizontal == none {
+    return (
+      angle: 90deg,
+      start: start,
+      end: end,
+    )
+  }
+  let (origin, direction) = horizontal
+  let projected-origin = _project(origin, camera)
+  let projected-end = _project((
+    origin.at(0) + direction.at(0),
+    origin.at(1) + direction.at(1),
+    origin.at(2),
+  ), camera)
   let edge = (
-    projected-top.at(1).at(0) - projected-top.at(0).at(0),
-    projected-top.at(1).at(1) - projected-top.at(0).at(1),
+    projected-end.at(0) - projected-origin.at(0),
+    projected-end.at(1) - projected-origin.at(1),
   )
   if calc.abs(edge.at(0)) + calc.abs(edge.at(1)) < .000001 {
     return (
@@ -733,6 +762,134 @@
   }
 }
 
+#let _render-scene-face(face, volume) = {
+  let normal = _unit(face.normal)
+  let style = volume.style
+  let fill = style.at("fill", default: none)
+  let fade-bottom = style.at("fade-bottom", default: none)
+  let fades = fade-bottom != none and normal.at(2) == 0
+  let brightness = _face-brightness(
+    normal,
+    volume.shading,
+    volume.light,
+  )
+  let shaded-fill = if type(fill) == color {
+    fill.darken((1 - brightness) * 100%)
+  } else {
+    fill
+  }
+  let face-fill = if fades {
+    let config = _fade-config(fade-bottom)
+    let points = ()
+    for contour in face.contours {
+      points += contour
+    }
+    let geometry = _fade-geometry(
+      points,
+      volume.camera,
+      config.start,
+      config.end,
+    )
+    gradient.linear(
+      .._fade-stops(
+        shaded-fill,
+        config.color,
+        geometry.start,
+        geometry.end,
+      ),
+      angle: geometry.angle,
+      relative: "self",
+    )
+  } else {
+    shaded-fill
+  }
+
+  cetz.draw.compound-path({
+    for contour in face.contours {
+      cetz.draw.line(..contour, close: true)
+    }
+  }, fill: face-fill, fill-rule: "even-odd", stroke: none)
+
+  if (
+    volume.shading in ("flat", "fancy")
+    and fill != none
+    and type(fill) != color
+  ) {
+    cetz.draw.compound-path({
+      for contour in face.contours {
+        cetz.draw.line(..contour, close: true)
+      }
+    }, fill: black.transparentize(brightness * 100%), fill-rule: "even-odd", stroke: none)
+  }
+}
+
+#let _draw-faded-scene-edge(high, low, value, config, camera) = {
+  let base = stroke(value)
+  let paint = if base.paint == auto { black } else { base.paint }
+  let projected-high = _project(high, camera)
+  let projected-low = _project(low, camera)
+  let direction = (
+    projected-low.at(0) - projected-high.at(0),
+    projected-low.at(1) - projected-high.at(1),
+  )
+  let outline-paint = gradient.linear(
+    .._fade-stops(
+      paint,
+      config.color,
+      config.start,
+      config.end,
+    ),
+    angle: calc.atan2(direction.at(0), direction.at(1)),
+    relative: "self",
+  )
+  cetz.draw.line(
+    high,
+    low,
+    stroke: _stroke-with-paint(base, outline-paint),
+  )
+}
+
+#let _render-scene-edge(edge, volumes, value) = {
+  if edge.materials.len() == 1 {
+    let volume = volumes.at(edge.materials.first())
+    let fade-bottom = volume.style.at("fade-bottom", default: none)
+    if fade-bottom != none {
+      let same-height = calc.abs(edge.start.at(2) - edge.end.at(2)) < 1e-6
+      if (
+        same-height
+        and calc.abs(edge.start.at(2) - volume.bottom) < 1e-6
+      ) {
+        return
+      }
+      let vertical = (
+        calc.abs(edge.start.at(0) - edge.end.at(0)) < 1e-6
+          and calc.abs(edge.start.at(1) - edge.end.at(1)) < 1e-6
+      )
+      if vertical {
+        let high = if edge.start.at(2) > edge.end.at(2) {
+          edge.start
+        } else {
+          edge.end
+        }
+        let low = if edge.start.at(2) > edge.end.at(2) {
+          edge.end
+        } else {
+          edge.start
+        }
+        _draw-faded-scene-edge(
+          high,
+          low,
+          value,
+          _fade-config(fade-bottom),
+          volume.camera,
+        )
+        return
+      }
+    }
+  }
+  cetz.draw.line(edge.start, edge.end, stroke: value)
+}
+
 #let _face(points, normal, style, shading, light, camera) = {
   if style.at("fade-bottom", default: none) != none and normal.at(2) < 0 {
     return
@@ -866,6 +1023,8 @@
           state.camera.at("elevation", default: 0deg),
           state.camera.at("azimuth", default: 0deg),
         ),
+        render-face: _render-scene-face,
+        render-edge: _render-scene-edge,
       )
     } else {
       cetz.draw.on-layer(-1, {
@@ -1319,6 +1478,10 @@
           top-fill: fill,
           side-fill: fill,
           section-fill: fill,
+          style: resolved-style,
+          shading: state.shading,
+          light: state.light,
+          camera: state.camera,
           debug-fill: resolved-style.at(
             "base-color",
             default: rgb("#b8d6ed"),
