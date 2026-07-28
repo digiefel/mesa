@@ -19,7 +19,6 @@ exclude = [
   "/assets/",
   "/crates/",
   "/examples/",
-  "/inspiration/",
   "/scripts/",
   "/target/",
   "/tests/",
