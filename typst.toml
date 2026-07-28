@@ -5,22 +5,9 @@ compiler = "0.14.0"
 entrypoint = "src/lib.typ"
 authors = ["Davide G. F. Lombardo <davide.lombardo@eit.lth.se>"]
 license = "MIT"
-description = "Draw semiconductor devices and fabrication processes."
+description = "Draw semiconductor devices and fabrication process flows from GDS layouts"
 repository = "https://github.com/digiefel/mesa"
-categories = ["visualization"]
+categories = ["visualization", "scripting", "integration"]
 disciplines = ["engineering", "physics"]
 keywords = ["semiconductor", "visualization", "process-flow", "cetz"]
-exclude = [
-  "/.gitignore",
-  "/manual.md",
-  "/Cargo.lock",
-  "/Cargo.toml",
-  "/ROADMAP.md",
-  "/assets/",
-  "/crates/",
-  "/examples/",
-  "/scripts/",
-  "/target/",
-  "/tests/",
-  "/vendor/",
-]
+exclude = [ "/manual.md", "/assets/" ]

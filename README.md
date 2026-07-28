@@ -39,7 +39,7 @@ loaded from GDS.
 )
 ```
 
-![A layer stack rendered with Mesa](assets/layer-stack.png)
+![A material stack rendered with Mesa](assets/layer-stack.png)
 
 GDS layouts can also be used to produce process-flow steps.
 
@@ -47,6 +47,12 @@ GDS layouts can also be used to produce process-flow steps.
 
 See the [usage manual](manual.md) for the complete API.
 
-> DISCLAIMER: >80% of Typst code and 100% of Rust code was LLM-written, guided by me at a high level. I'm not fluent in Rust and I couldn't have justified writing this package otherwise. Since this is only a visualization tool, I felt that vibe coding it would be justified.
+> DISCLAIMER: >80% of Typst code and 100% of Rust code was LLM-written, guided by me at a high level. I'm not fluent in Rust and I couldn't have justified writing this package otherwise. Since this is only a visualization tool, I felt that vibe coding it could be justified. Nonetheless, I have been using it for my own projects and have been happy with the results.
 
 In case of any bugs or missing features, please [open an issue](https://github.com/digiefel/mesa/issues) on GitHub.
+
+## Changelog
+
+### 0.1.0
+
+Initial release
