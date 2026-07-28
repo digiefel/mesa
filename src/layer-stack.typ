@@ -717,6 +717,7 @@
   label-anchor: none,
   label-name: none,
   bevel: auto,
+  stroke: auto,
   internal-stroke: auto,
   mask: auto,
   ..style,
@@ -788,6 +789,11 @@
       style,
       state.palette,
     )
+    if stroke != auto {
+      resolved-style.stroke = stroke
+    } else if state.stroke != auto {
+      resolved-style.stroke = state.stroke
+    }
     resolved-style.insert(
       "internal-stroke",
       if internal-stroke == auto {
@@ -918,7 +924,7 @@
   length: .8mm,
   baseline: none,
   background: none,
-  stroke: none,
+  stroke: auto,
   padding: none,
   cut: none,
   section: none,
@@ -964,7 +970,7 @@
     length: length,
     baseline: baseline,
     background: background,
-    stroke: stroke,
+    stroke: none,
     padding: padding,
     debug: canvas-debug,
     {
@@ -981,6 +987,7 @@
           shading: shading,
           light: light,
           bevel: bevel,
+          stroke: stroke,
           internal-stroke: internal-stroke,
           crease-angle: crease-angle,
           camera: camera,
