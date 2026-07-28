@@ -45,6 +45,8 @@ GDS layouts can also be used to produce process-flow steps.
 
 ![A transistor fabrication process rendered with Mesa](assets/process-flow.png)
 
+See the [usage manual](manual.md) for the complete API.
+
 > DISCLAIMER: >80% of Typst code and 100% of Rust code was LLM-written, guided by me at a high level. I'm not fluent in Rust and I couldn't have justified writing this package otherwise. Since this is only a visualiation tool, I felt that vibe coding it would be justified.
 
 In case of any bugs or missing features, please [open an issue](https://github.com/digiefel/mesa/issues) on GitHub.

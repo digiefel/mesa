@@ -12,7 +12,7 @@ disciplines = ["engineering", "physics"]
 keywords = ["semiconductor", "visualization", "process-flow", "cetz"]
 exclude = [
   "/.gitignore",
-  "/API.md",
+  "/manual.md",
   "/Cargo.lock",
   "/Cargo.toml",
   "/ROADMAP.md",
