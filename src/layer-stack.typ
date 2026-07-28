@@ -579,7 +579,7 @@
         volumes,
         view,
         toward-light,
-        shadows: state.shading != "none",
+        shadows: state.shading == "fancy",
         diagnostics: true,
       ) {
         if face.source not in seen {
@@ -638,7 +638,7 @@
         volumes,
         view: view,
         toward-light: _toward-light(state.light),
-        shadows: state.shading != "none",
+        shadows: state.shading == "fancy",
         crease-angle: state.crease-angle,
         render-face: _render-scene-face,
         render-edge: _render-scene-edge,
