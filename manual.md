@@ -140,9 +140,8 @@ layer(
 )
 ```
 
-`base-color` fills bevel faces and is inferred from a solid `fill`. Patterned
-fills can supply it explicitly. `fade-bottom` fades a material between two
-depths measured from its top:
+For patterned fills, `base-color` sets the solid color used on bevel faces.
+`fade-bottom` fades a material between two depths measured from its top:
 
 ```typ
 fade-bottom: (start: 70%, end: 95%, color: white)
@@ -270,23 +269,11 @@ Face names remain fixed in model space:
 
 Light angles describe the direction in which light travels. Azimuth `0deg`
 travels along `+y`; positive azimuth rotates toward `+x`. Elevation `0deg`
-lies in the `x-y` plane; positive elevation travels toward `-z`.
-
-Camera and light directions are independent. A directional light produces
-parallel rays and geometric self-shadowing:
-
-```text
-cosine = max(0, dot(face-normal, -light-direction))
-brightness = (1 - intensity) + intensity * visibility * cosine
-```
-
-`visibility` is `0` for shadowed or back-facing surfaces and `1` for directly
-lit surfaces. `intensity` accepts a number from `0` to `1` or an equivalent
-ratio.
+lies in the `x-y` plane; positive elevation makes the light source appear higher.
+`intensity` accepts a number from `0` to `1` or an equivalent ratio.
 
 `shading: "none"` uses the material colors directly. `"flat"` applies lighting
-and self-shadowing. `"fancy"` also adds bevel faces while preserving material
-fills and tilings.
+and shadows. `"fancy"` also adds shaded bevels to each layer.
 
 `bevel` accepts one number, one ratio, or separate top and bottom values:
 
@@ -351,8 +338,9 @@ i.e. they can only run along the `z` axis.
 `semi.debug.topology(body, ..layer-stack-arguments)` displays outline,
 material, internal, and occluded edge classifications.
 
+`semi.debug.gds(data)` lists the units, cells, and layers in a GDS file.
+
 ### Canvas
 
 `length`, `baseline`, `background`, `stroke`, and `padding` pass through to
 `cetz.canvas`. `canvas-debug` controls CeTZ's bounding-box debugger.
-Please refer to the CeTZ documentation for more details.
