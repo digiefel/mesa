@@ -1,0 +1,20 @@
+# Third-party licenses
+
+Mesa imports [CeTZ 0.5.2](https://github.com/cetz-package/cetz), licensed under
+LGPL-3.0-or-later. CeTZ is resolved as a separate Typst package and is not
+included in Mesa.
+
+The bundled WebAssembly geometry plugin uses the following Rust software.
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+~~~text
+{{{text}}}
+~~~
+{{/each~}}

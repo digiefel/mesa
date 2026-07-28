@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+cargo about generate \
+  --manifest-path crates/geometry/Cargo.toml \
+  --locked \
+  --config scripts/licenses/about.toml \
+  --output-file THIRD_PARTY_LICENSES.md \
+  scripts/licenses/third-party-licenses.hbs

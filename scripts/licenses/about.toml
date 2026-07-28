@@ -1,0 +1,24 @@
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "Unicode-3.0",
+  "Unlicense",
+]
+targets = ["wasm32-unknown-unknown"]
+ignore-dev-dependencies = true
+private = { ignore = true }
+
+[layout21utils.clarify]
+license = "BSD-3-Clause"
+
+[[layout21utils.clarify.git]]
+path = "LICENSE"
+checksum = "a42dc5b78288014ee61f6be85a07e9bbd19477225f1d1e545ac2c6ef6bc2dc32"
+
+[wasm-minimal-protocol.clarify]
+license = "Unlicense"
+
+[[wasm-minimal-protocol.clarify.files]]
+path = "LICENSE"
+checksum = "6b0382b16279f26ff69014300541967a356a666eb0b91b422f6862f6b7dad17e"
