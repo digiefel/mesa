@@ -94,14 +94,28 @@
   result
 }
 
-#let _render-faces(volumes, view, render-face: none) = {
+#let _render-faces(
+  volumes,
+  view,
+  toward-light: (0.0, 0.0, 1.0),
+  shadows: false,
+  render-face: none,
+) = {
   for (index, volume) in volumes.enumerate() {
     _validate-volume(volume, index)
   }
 
-  let faces = kernel.scene-surfaces(volumes, view)
+  let faces = kernel.scene-surfaces(
+    volumes,
+    view,
+    toward-light,
+    shadows: shadows,
+  )
   for (index, face) in faces.enumerate() {
-    if face.normal.at(2) >= 0 {
+    let contours = face.contours.filter(contour => contour.len() >= 3)
+    if contours.len() > 0 {
+      let renderable-face = face
+      renderable-face.contours = contours
       let volume = volumes.at(face.material)
       draw.on-layer(-1 + index / (faces.len() + 1), {
         if render-face == none {
@@ -111,12 +125,12 @@
             volume.at("side-fill", default: rgb("#91b4ce"))
           }
           draw.compound-path({
-            for contour in face.contours {
+            for contour in contours {
               draw.line(..contour, close: true)
             }
           }, fill: fill, fill-rule: "even-odd", stroke: none)
         } else {
-          render-face(face, volume)
+          render-face(renderable-face, volume)
         }
       })
     }
@@ -188,13 +202,21 @@
 #let render(
   volumes,
   view: none,
+  toward-light: (0.0, 0.0, 1.0),
+  shadows: false,
   styles: edge-styles,
   crease-angle: 0deg,
   render-face: none,
   render-edge: none,
 ) = {
   assert(view != none, message: "3D scene rendering requires a view")
-  _render-faces(volumes, view, render-face: render-face)
+  _render-faces(
+    volumes,
+    view,
+    toward-light: toward-light,
+    shadows: shadows,
+    render-face: render-face,
+  )
   _render-edges(
     volumes,
     view,

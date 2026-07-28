@@ -92,6 +92,10 @@ struct SceneSurfacesRequest {
     version: u8,
     volumes: Vec<topology::WireVolume>,
     view: visibility::ViewMatrix,
+    #[serde(rename = "toward-light")]
+    toward_light: [f64; 3],
+    shadows: bool,
+    diagnostics: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -295,19 +299,14 @@ pub fn scene_topology(input: &[u8]) -> Result<Vec<u8>, String> {
 
     topology::validate_volumes(&request.volumes)?;
     visibility::validate_view(request.view)?;
-    if !request.smooth_join_cosine.is_finite()
-        || !(0.0..=1.0).contains(&request.smooth_join_cosine)
+    if !request.smooth_join_cosine.is_finite() || !(0.0..=1.0).contains(&request.smooth_join_cosine)
     {
         return Err(format!(
             "smooth join cosine must be between 0 and 1; got {}",
             request.smooth_join_cosine,
         ));
     }
-    let edges = visibility::scene_edges(
-        &request.volumes,
-        request.view,
-        request.smooth_join_cosine,
-    );
+    let edges = visibility::scene_edges(&request.volumes, request.view, request.smooth_join_cosine);
 
     let mut output = Vec::new();
     ciborium::into_writer(
@@ -335,7 +334,26 @@ pub fn scene_surfaces(input: &[u8]) -> Result<Vec<u8>, String> {
 
     topology::validate_volumes(&request.volumes)?;
     visibility::validate_view(request.view)?;
-    let faces = visibility::scene_surfaces(&request.volumes, request.view);
+    if request
+        .toward_light
+        .iter()
+        .any(|component| !component.is_finite())
+        || request
+            .toward_light
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            <= 1e-12
+    {
+        return Err("toward-light must be a finite non-zero vector".into());
+    }
+    let faces = visibility::scene_surfaces(
+        &request.volumes,
+        request.view,
+        request.toward_light,
+        request.shadows,
+        request.diagnostics,
+    );
     let mut output = Vec::new();
     ciborium::into_writer(
         &SceneSurfacesResponse {
@@ -472,12 +490,7 @@ fn bounds(shapes: &IntShapes<i64>) -> Option<(i64, i64, i64, i64)> {
 }
 
 fn clip_shapes_at_y(shapes: IntShapes<i64>, y: i64, positive: bool) -> IntShapes<i64> {
-    clip_shapes_at_line(
-        shapes,
-        IntPoint::new(0, y),
-        IntPoint::new(1, y),
-        positive,
-    )
+    clip_shapes_at_line(shapes, IntPoint::new(0, y), IntPoint::new(1, y), positive)
 }
 
 fn clip_shapes_at_line(
@@ -539,8 +552,7 @@ fn clip_contour_to_left_half_plane(
 
 fn line_side(from: IntPoint<i64>, to: IntPoint<i64>, point: IntPoint<i64>) -> i128 {
     (i128::from(to.x) - i128::from(from.x)) * (i128::from(point.y) - i128::from(from.y))
-        - (i128::from(to.y) - i128::from(from.y))
-            * (i128::from(point.x) - i128::from(from.x))
+        - (i128::from(to.y) - i128::from(from.y)) * (i128::from(point.x) - i128::from(from.x))
 }
 
 fn line_intersection(
@@ -550,10 +562,10 @@ fn line_intersection(
     end_side: i128,
 ) -> IntPoint<i64> {
     let denominator = start_side - end_side;
-    let x = i128::from(start.x) * denominator
-        + (i128::from(end.x) - i128::from(start.x)) * start_side;
-    let y = i128::from(start.y) * denominator
-        + (i128::from(end.y) - i128::from(start.y)) * start_side;
+    let x =
+        i128::from(start.x) * denominator + (i128::from(end.x) - i128::from(start.x)) * start_side;
+    let y =
+        i128::from(start.y) * denominator + (i128::from(end.y) - i128::from(start.y)) * start_side;
     IntPoint::new(
         rounded_division(x, denominator) as i64,
         rounded_division(y, denominator) as i64,

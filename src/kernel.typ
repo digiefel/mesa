@@ -61,6 +61,9 @@
   top-bevel: int(calc.round(
     volume.at("top-bevel", default: 0) * grid-scale,
   )),
+  bottom-bevel: int(calc.round(
+    volume.at("bottom-bevel", default: 0) * grid-scale,
+  )),
 )
 
 #let difference(subject, mask) = {
@@ -156,20 +159,37 @@
   ))
 }
 
-#let scene-surfaces(volumes, view) = {
+#let scene-surfaces(
+  volumes,
+  view,
+  toward-light,
+  shadows: false,
+  diagnostics: false,
+) = {
   let result = cbor(geometry-kernel.scene_surfaces(cbor.encode((
     version: protocol-version,
     volumes: volumes.enumerate().map(
       ((index, volume)) => _encode-volume(volume, index),
     ),
     view: view,
+    toward-light: toward-light,
+    shadows: shadows,
+    diagnostics: diagnostics,
   ))))
   assert.eq(result.version, protocol-version)
-  result.faces.map(face => (
-    normal: face.normal,
-    material: face.material,
-    contours: face.contours.map(
-      contour => contour.map(_decode-point),
-    ),
-  ))
+  result.faces.map(face => {
+    let decoded = (
+      normal: face.normal,
+      material: face.material,
+      light-visibility: face.light-visibility,
+      contours: face.contours.map(
+        contour => contour.map(_decode-point),
+      ),
+    )
+    if diagnostics {
+      decoded.source = face.source
+      decoded.center = _decode-point(face.center)
+    }
+    decoded
+  })
 }

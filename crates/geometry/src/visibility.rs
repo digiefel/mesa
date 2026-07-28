@@ -11,9 +11,13 @@ use crate::topology::{
 
 const EPSILON: f64 = 1e-9;
 const SURFACE_SCALE: f64 = 1000.0;
+// Leave room for the half-plane polygons used while splitting crossing faces.
+// Keeping coordinates below 2^31 also keeps i_overlay's grid shifts valid on wasm32.
+const SURFACE_MAX_COORDINATE: f64 = i32::MAX as f64 / 16.0;
 
 type Point2 = [f64; 2];
 type Point3F = [f64; 3];
+type SurfaceShapes = IntShapes<i32>;
 pub(crate) type ViewMatrix = [[f64; 3]; 3];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -36,8 +40,14 @@ pub(crate) struct WireEdge {
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct WireSurface {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<u32>,
     pub(crate) normal: Point3,
     pub(crate) material: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) center: Option<Point3F>,
+    #[serde(rename = "light-visibility")]
+    pub(crate) light_visibility: f64,
     pub(crate) contours: Vec<Vec<Point3>>,
 }
 
@@ -48,6 +58,57 @@ struct ProjectedFace {
     low: Point2,
     high: Point2,
     material: u32,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceGrid {
+    origin: Point2,
+    scale: f64,
+}
+
+impl SurfaceGrid {
+    fn new(faces: &[ProjectedFace]) -> Self {
+        let Some(first) = faces.first() else {
+            return Self {
+                origin: [0.0, 0.0],
+                scale: SURFACE_SCALE,
+            };
+        };
+        let mut low = first.low;
+        let mut high = first.high;
+        for face in faces.iter().skip(1) {
+            low[0] = low[0].min(face.low[0]);
+            low[1] = low[1].min(face.low[1]);
+            high[0] = high[0].max(face.high[0]);
+            high[1] = high[1].max(face.high[1]);
+        }
+        let span = (high[0] - low[0]).max(high[1] - low[1]);
+        let scale = if span > EPSILON {
+            SURFACE_SCALE.min(SURFACE_MAX_COORDINATE / span)
+        } else {
+            SURFACE_SCALE
+        };
+        Self { origin: low, scale }
+    }
+
+    fn encode(self, point: Point2) -> IntPoint<i32> {
+        let encode = |value: f64, origin: f64| {
+            ((value - origin) * self.scale)
+                .round()
+                .clamp(i32::MIN as f64 + 1.0, i32::MAX as f64 - 1.0) as i32
+        };
+        IntPoint::new(
+            encode(point[0], self.origin[0]),
+            encode(point[1], self.origin[1]),
+        )
+    }
+
+    fn decode(self, point: IntPoint<i32>) -> Point2 {
+        [
+            point.x as f64 / self.scale + self.origin[0],
+            point.y as f64 / self.scale + self.origin[1],
+        ]
+    }
 }
 
 pub(crate) fn validate_view(view: ViewMatrix) -> Result<(), String> {
@@ -79,8 +140,7 @@ pub(crate) fn scene_edges(
     view: ViewMatrix,
     smooth_join_cosine: f64,
 ) -> Vec<WireEdge> {
-    let (faces, edges) =
-        scene_geometry_with_smooth_join_cosine(volumes, smooth_join_cosine);
+    let (faces, edges) = scene_geometry_with_smooth_join_cosine(volumes, smooth_join_cosine);
     let projected_faces: Vec<ProjectedFace> = faces
         .iter()
         .map(|face| ProjectedFace::new(face, view))
@@ -91,25 +151,42 @@ pub(crate) fn scene_edges(
         .collect()
 }
 
-pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<WireSurface> {
+pub(crate) fn scene_surfaces(
+    volumes: &[WireVolume],
+    view: ViewMatrix,
+    toward_light: Point3F,
+    shadows: bool,
+    diagnostics: bool,
+) -> Vec<WireSurface> {
     let faces = crate::topology::scene_faces(volumes)
         .into_iter()
-        .filter(|face| face.normal[2] >= 0)
+        .filter(|face| face.normal[0] != 0 || face.normal[1] != 0 || face.normal[2] >= 0)
         .collect::<Vec<_>>();
+    let light_visibility = if shadows {
+        light_visibility(&faces, toward_light)
+    } else {
+        vec![1.0; faces.len()]
+    };
+    let centers: Vec<Point3F> = faces.iter().map(face_center).collect();
     let projected: Vec<ProjectedFace> = faces
         .iter()
         .map(|face| ProjectedFace::new(face, view))
         .collect();
-    let projected_shapes: Vec<IntShapes<i64>> = projected
+    let grid = SurfaceGrid::new(&projected);
+    let projected_shapes: Vec<SurfaceShapes> = projected
         .iter()
-        .map(|face| projected_to_int_shapes(&face.contours))
+        .map(|face| projected_to_int_shapes(&face.contours, grid))
         .collect();
     let mut result = Vec::new();
 
     for (index, face) in faces.iter().enumerate() {
+        if projected_shapes[index].is_empty() {
+            continue;
+        }
         let mut occluders = Vec::new();
         for (other_index, other) in projected.iter().enumerate() {
             if index == other_index
+                || projected_shapes[other_index].is_empty()
                 || !projected[index].bounds_overlap(other)
             {
                 continue;
@@ -118,29 +195,26 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
                 other,
                 &projected[index],
                 &projected_shapes[other_index],
+                grid,
             );
             if !occluded.is_empty() {
                 occluders.push(occluded);
             }
         }
-        let occluded = union_regions(occluders);
-        let visible = if occluded.is_empty() {
-            projected_shapes[index].clone()
-        } else {
-            let mut overlay = Overlay::with_shapes(&projected_shapes[index], &occluded);
-            overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd)
-        };
+        let mut visible = projected_shapes[index].clone();
+        for occluder in occluders {
+            let mut overlay = Overlay::with_shapes(&visible, &occluder);
+            visible = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+            if visible.is_empty() {
+                break;
+            }
+        }
 
         for shape in visible {
             let depth = shape
                 .iter()
                 .flatten()
-                .filter_map(|point| {
-                    projected[index].depth_at([
-                        point.x as f64 / SURFACE_SCALE,
-                        point.y as f64 / SURFACE_SCALE,
-                    ])
-                })
+                .filter_map(|point| projected[index].depth_at(grid.decode(*point)))
                 .sum::<f64>()
                 / shape.iter().map(Vec::len).sum::<usize>() as f64;
             let contours = shape
@@ -149,15 +223,9 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
                     contour
                         .into_iter()
                         .filter_map(|point| {
-                            let screen = [
-                                point.x as f64 / SURFACE_SCALE,
-                                point.y as f64 / SURFACE_SCALE,
-                            ];
+                            let screen = grid.decode(point);
                             let depth = projected[index].depth_at(screen)?;
-                            Some(inverse_transform_point(
-                                [screen[0], screen[1], depth],
-                                view,
-                            ))
+                            Some(inverse_transform_point([screen[0], screen[1], depth], view))
                         })
                         .collect()
                 })
@@ -165,8 +233,11 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
             result.push((
                 depth,
                 WireSurface {
+                    source: diagnostics.then_some(index as u32),
                     normal: face.normal,
                     material: face.material,
+                    center: diagnostics.then_some(centers[index]),
+                    light_visibility: light_visibility[index],
                     contours,
                 },
             ));
@@ -176,11 +247,129 @@ pub(crate) fn scene_surfaces(volumes: &[WireVolume], view: ViewMatrix) -> Vec<Wi
     result.into_iter().map(|(_, surface)| surface).collect()
 }
 
+struct LightingFace {
+    normal: Point3F,
+    point: Point3F,
+    drop_axis: usize,
+    contours: Vec<Vec<Point2>>,
+}
+
+fn light_visibility(faces: &[Face], toward_light: Point3F) -> Vec<f64> {
+    let prepared: Vec<LightingFace> = faces.iter().map(LightingFace::new).collect();
+    prepared
+        .iter()
+        .enumerate()
+        .map(|(receiver_index, receiver)| {
+            if dot(receiver.normal, toward_light) <= EPSILON {
+                return 0.0;
+            }
+            let blocked = prepared
+                .iter()
+                .enumerate()
+                .any(|(occluder_index, occluder)| {
+                    receiver_index != occluder_index
+                        && occluder.intersects_ray(receiver.point, toward_light)
+                });
+            if blocked { 0.0 } else { 1.0 }
+        })
+        .collect()
+}
+
+fn face_center(face: &Face) -> Point3F {
+    let Some(contour) = face.contours.first() else {
+        return [0.0; 3];
+    };
+    if contour.is_empty() {
+        return [0.0; 3];
+    }
+    let mut center = [0.0; 3];
+    for point in contour {
+        for axis in 0..3 {
+            center[axis] += point[axis] as f64;
+        }
+    }
+    for component in &mut center {
+        *component /= contour.len() as f64;
+    }
+    center
+}
+
+impl LightingFace {
+    fn new(face: &Face) -> Self {
+        let normal = [
+            face.normal[0] as f64,
+            face.normal[1] as f64,
+            face.normal[2] as f64,
+        ];
+        let drop_axis = normal
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.abs().total_cmp(&right.1.abs()))
+            .map(|(axis, _)| axis)
+            .unwrap_or(2);
+        let contours = face
+            .contours
+            .iter()
+            .map(|contour| {
+                contour
+                    .iter()
+                    .map(|point| {
+                        project_for_axis(
+                            [point[0] as f64, point[1] as f64, point[2] as f64],
+                            drop_axis,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        Self {
+            normal,
+            point: face_center(face),
+            drop_axis,
+            contours,
+        }
+    }
+
+    fn intersects_ray(&self, origin: Point3F, direction: Point3F) -> bool {
+        let denominator = dot(self.normal, direction);
+        if denominator.abs() <= EPSILON {
+            return false;
+        }
+        let offset = [
+            self.point[0] - origin[0],
+            self.point[1] - origin[1],
+            self.point[2] - origin[2],
+        ];
+        let distance = dot(self.normal, offset) / denominator;
+        if distance <= 1e-6 {
+            return false;
+        }
+        let intersection = [
+            origin[0] + direction[0] * distance,
+            origin[1] + direction[1] * distance,
+            origin[2] + direction[2] * distance,
+        ];
+        point_in_compound(
+            project_for_axis(intersection, self.drop_axis),
+            &self.contours,
+        )
+    }
+}
+
+fn project_for_axis(point: Point3F, drop_axis: usize) -> Point2 {
+    match drop_axis {
+        0 => [point[1], point[2]],
+        1 => [point[0], point[2]],
+        _ => [point[0], point[1]],
+    }
+}
+
 fn nearer_projected_region(
     candidate: &ProjectedFace,
     surface: &ProjectedFace,
-    candidate_shape: &IntShapes<i64>,
-) -> IntShapes<i64> {
+    candidate_shape: &SurfaceShapes,
+    grid: SurfaceGrid,
+) -> SurfaceShapes {
     let (Some(candidate_depth), Some(surface_depth)) =
         (candidate.depth_coefficients(), surface.depth_coefficients())
     else {
@@ -210,51 +399,59 @@ fn nearer_projected_region(
     } else if depths.iter().all(|depth| *depth > EPSILON) {
         candidate_shape.clone()
     } else {
-        nearer_overlap(candidate, surface, candidate_shape)
+        nearer_overlap(candidate, surface, candidate_shape, grid)
     }
 }
 
-fn union_regions(mut regions: Vec<IntShapes<i64>>) -> IntShapes<i64> {
-    while regions.len() > 1 {
-        let mut merged = Vec::with_capacity(regions.len().div_ceil(2));
-        let mut iterator = regions.into_iter();
-        while let Some(first) = iterator.next() {
-            if let Some(second) = iterator.next() {
-                let mut overlay = Overlay::with_shapes(&first, &second);
-                merged.push(overlay.overlay(OverlayRule::Union, FillRule::EvenOdd));
-            } else {
-                merged.push(first);
-            }
-        }
-        regions = merged;
-    }
-    regions.pop().unwrap_or_default()
-}
-
-fn projected_to_int_shapes(contours: &[Vec<Point2>]) -> IntShapes<i64> {
-    vec![
+fn projected_to_int_shapes(contours: &[Vec<Point2>], grid: SurfaceGrid) -> SurfaceShapes {
+    let Some(outer) = contours
+        .first()
+        .and_then(|contour| projected_to_int_path(contour, grid))
+    else {
+        return Vec::new();
+    };
+    let mut shape = vec![outer];
+    shape.extend(
         contours
             .iter()
-            .map(|contour| {
-                contour
-                    .iter()
-                    .map(|[x, y]| {
-                        IntPoint::new(
-                            (x * SURFACE_SCALE).round() as i64,
-                            (y * SURFACE_SCALE).round() as i64,
-                        )
-                    })
-                    .collect()
-            })
-            .collect(),
-    ]
+            .skip(1)
+            .filter_map(|contour| projected_to_int_path(contour, grid)),
+    );
+    vec![shape]
+}
+
+fn projected_to_int_path(contour: &[Point2], grid: SurfaceGrid) -> Option<Vec<IntPoint<i32>>> {
+    let mut path = Vec::with_capacity(contour.len());
+    for point in contour {
+        let point = grid.encode(*point);
+        if path.last() != Some(&point) {
+            path.push(point);
+        }
+    }
+    if path.len() > 1 && path.first() == path.last() {
+        path.pop();
+    }
+    if path.len() < 3 || int_path_area2(&path) == 0 {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+fn int_path_area2(path: &[IntPoint<i32>]) -> i128 {
+    path.iter()
+        .zip(path.iter().cycle().skip(1))
+        .take(path.len())
+        .map(|(left, right)| left.x as i128 * right.y as i128 - right.x as i128 * left.y as i128)
+        .sum::<i128>()
 }
 
 fn nearer_overlap(
     candidate: &ProjectedFace,
     surface: &ProjectedFace,
-    overlap: &IntShapes<i64>,
-) -> IntShapes<i64> {
+    overlap: &SurfaceShapes,
+    grid: SurfaceGrid,
+) -> SurfaceShapes {
     let (Some(candidate_depth), Some(surface_depth)) =
         (candidate.depth_coefficients(), surface.depth_coefficients())
     else {
@@ -288,19 +485,18 @@ fn nearer_overlap(
         .flatten()
         .flatten()
         .map(|point| {
-            let x = point.x as f64 / SURFACE_SCALE - line_origin[0];
-            let y = point.y as f64 / SURFACE_SCALE - line_origin[1];
+            let [x, y] = grid.decode(*point);
+            let x = x - line_origin[0];
+            let y = y - line_origin[1];
             x.hypot(y)
         })
         .fold(1.0_f64, f64::max)
         * 4.0;
     let point = |along: f64, across: f64| {
-        IntPoint::new(
-            ((line_origin[0] + tangent[0] * along + normal[0] * across) * SURFACE_SCALE)
-                .round() as i64,
-            ((line_origin[1] + tangent[1] * along + normal[1] * across) * SURFACE_SCALE)
-                .round() as i64,
-        )
+        grid.encode([
+            line_origin[0] + tangent[0] * along + normal[0] * across,
+            line_origin[1] + tangent[1] * along + normal[1] * across,
+        ])
     };
     let positive_half_plane = vec![vec![vec![
         point(-radius, 0.0),
@@ -314,12 +510,9 @@ fn nearer_overlap(
 
 fn inverse_transform_point(point: Point3F, view: ViewMatrix) -> Point3 {
     [
-        (view[0][0] * point[0] + view[1][0] * point[1] + view[2][0] * point[2])
-            .round() as i64,
-        (view[0][1] * point[0] + view[1][1] * point[1] + view[2][1] * point[2])
-            .round() as i64,
-        (view[0][2] * point[0] + view[1][2] * point[1] + view[2][2] * point[2])
-            .round() as i64,
+        (view[0][0] * point[0] + view[1][0] * point[1] + view[2][0] * point[2]).round() as i64,
+        (view[0][1] * point[0] + view[1][1] * point[1] + view[2][1] * point[2]).round() as i64,
+        (view[0][2] * point[0] + view[1][2] * point[1] + view[2][2] * point[2]).round() as i64,
     ]
 }
 
@@ -638,6 +831,7 @@ mod tests {
                 top: 1_000,
                 material: 0,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
             WireVolume {
                 shapes: vec![vec![rectangle(4_000, -1_000, 6_000, 3_000)]],
@@ -645,6 +839,7 @@ mod tests {
                 top: 3_000,
                 material: 1,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
         ];
         let edges = scene_edges(
@@ -693,6 +888,7 @@ mod tests {
                 top: 0,
                 material: 0,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
             WireVolume {
                 shapes: result,
@@ -700,6 +896,7 @@ mod tests {
                 top: 1_500,
                 material: 1,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());
@@ -714,19 +911,11 @@ mod tests {
             Some(EdgeVisibility::Occluded)
         );
         assert_eq!(
-            visibility_of(
-                &edges,
-                [10_000.0, 0.0, -1_500.0],
-                [10_000.0, 0.0, 0.0],
-            ),
+            visibility_of(&edges, [10_000.0, 0.0, -1_500.0], [10_000.0, 0.0, 0.0],),
             Some(EdgeVisibility::Visible)
         );
         assert_eq!(
-            visibility_of(
-                &edges,
-                [10_000.0, 0.0, 0.0],
-                [10_000.0, 0.0, 1_500.0],
-            ),
+            visibility_of(&edges, [10_000.0, 0.0, 0.0], [10_000.0, 0.0, 1_500.0],),
             Some(EdgeVisibility::Visible)
         );
     }
@@ -738,10 +927,11 @@ mod tests {
             vec![rectangle(15_000, 10_000, 45_000, 40_000)],
             vec![rectangle(75_000, 10_000, 105_000, 40_000)],
         ];
-        let mut overlay =
-            Overlay::with_shapes(&to_int_shapes(bounds.clone()), &to_int_shapes(contacts.clone()));
-        let oxide =
-            from_int_shapes(overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd));
+        let mut overlay = Overlay::with_shapes(
+            &to_int_shapes(bounds.clone()),
+            &to_int_shapes(contacts.clone()),
+        );
+        let oxide = from_int_shapes(overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd));
         let volumes = vec![
             WireVolume {
                 shapes: bounds,
@@ -749,6 +939,7 @@ mod tests {
                 top: 40_000,
                 material: 0,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
             WireVolume {
                 shapes: oxide,
@@ -756,6 +947,7 @@ mod tests {
                 top: 45_000,
                 material: 1,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
             WireVolume {
                 shapes: contacts,
@@ -763,10 +955,11 @@ mod tests {
                 top: 50_000,
                 material: 2,
                 top_bevel: 0,
+                bottom_bevel: 0,
             },
         ];
         let view = cetz_ortho_view(35.0_f64.to_radians(), 35.0_f64.to_radians());
-        let surfaces = scene_surfaces(&volumes, view);
+        let surfaces = scene_surfaces(&volumes, view, [0.0, 0.0, 1.0], false, false);
         let oxide = projected_surface_shapes(&surfaces, view, |surface| {
             surface.material == 1 && surface.normal == [0, 0, 1]
         });
@@ -787,35 +980,79 @@ mod tests {
     }
 
     #[test]
-    fn subtracting_a_union_matches_sequential_occluder_subtraction() {
-        let subject = to_int_shapes(vec![vec![rectangle(0, 0, 10_000, 6_000)]]);
-        let occluders = vec![
-            to_int_shapes(vec![vec![rectangle(1_000, -1_000, 6_000, 4_000)]]),
-            to_int_shapes(vec![vec![rectangle(4_000, 2_000, 9_000, 7_000)]]),
-        ];
-        let mut sequential = subject.clone();
-        for occluder in &occluders {
-            let mut overlay = Overlay::with_shapes(&sequential, occluder);
-            sequential = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
-        }
-        let union = union_regions(occluders);
-        let mut overlay = Overlay::with_shapes(&subject, &union);
-        let combined = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+    fn computes_face_visibility_toward_the_light() {
+        let horizontal = |height, material| Face {
+            normal: [0, 0, 1],
+            material,
+            interior: false,
+            contours: vec![vec![
+                [0, 0, height],
+                [10, 0, height],
+                [10, 10, height],
+                [0, 10, height],
+            ]],
+        };
+        let faces = vec![horizontal(0, 0), horizontal(10, 1)];
 
-        let mut overlay = Overlay::with_shapes(&sequential, &combined);
-        let only_sequential = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
-        let mut overlay = Overlay::with_shapes(&combined, &sequential);
-        let only_combined = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
-        assert_eq!(shape_area2(&only_sequential), 0);
-        assert_eq!(shape_area2(&only_combined), 0);
+        assert_eq!(light_visibility(&faces, [0.0, 0.0, 1.0]), vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn rejects_contours_that_collapse_in_projection() {
+        let grid = SurfaceGrid {
+            origin: [0.0, 0.0],
+            scale: SURFACE_SCALE,
+        };
+        assert!(
+            projected_to_int_shapes(&[vec![[0.0, 0.0], [1.0, 0.0], [2.0, 0.0],]], grid).is_empty()
+        );
+        assert!(
+            projected_to_int_shapes(
+                &[vec![[0.0, 0.0], [0.000_1, 0.000_1], [0.000_2, 0.000_2],]],
+                grid
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            projected_to_int_shapes(
+                &[vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0],]],
+                grid
+            )
+            .len(),
+            1,
+        );
+    }
+
+    #[test]
+    fn adapts_the_surface_grid_to_large_scenes() {
+        let face = ProjectedFace {
+            contours: Vec::new(),
+            normal: [0.0, 0.0, 1.0],
+            constant: 0.0,
+            low: [-10_000_000.0, -5_000_000.0],
+            high: [10_000_000.0, 5_000_000.0],
+            material: 0,
+        };
+        let grid = SurfaceGrid::new(&[face]);
+        assert!(grid.scale < SURFACE_SCALE);
+        let encoded = grid.encode([10_000_000.0, 5_000_000.0]);
+        assert!(f64::from(encoded.x) <= SURFACE_MAX_COORDINATE + 1.0);
+        assert!(f64::from(encoded.y) <= SURFACE_MAX_COORDINATE + 1.0);
+        let decoded = grid.decode(encoded);
+        assert!((decoded[0] - 10_000_000.0).abs() <= 0.5 / grid.scale);
+        assert!((decoded[1] - 5_000_000.0).abs() <= 0.5 / grid.scale);
     }
 
     fn projected_surface_shapes(
         surfaces: &[WireSurface],
         view: ViewMatrix,
         include: impl Fn(&WireSurface) -> bool,
-    ) -> IntShapes<i64> {
+    ) -> SurfaceShapes {
         let mut result = Vec::new();
+        let grid = SurfaceGrid {
+            origin: [0.0, 0.0],
+            scale: SURFACE_SCALE,
+        };
         for surface in surfaces.iter().filter(|surface| include(surface)) {
             let contours: Vec<Vec<Point2>> = surface
                 .contours
@@ -830,7 +1067,7 @@ mod tests {
                         .collect()
                 })
                 .collect();
-            let shapes = projected_to_int_shapes(&contours);
+            let shapes = projected_to_int_shapes(&contours, grid);
             if result.is_empty() {
                 result = shapes;
             } else {
@@ -841,7 +1078,7 @@ mod tests {
         result
     }
 
-    fn shape_area2(shapes: &IntShapes<i64>) -> i128 {
+    fn shape_area2(shapes: &SurfaceShapes) -> i128 {
         shapes
             .iter()
             .map(|shape| {

@@ -1,8 +1,6 @@
 #import "@preview/cetz:0.5.2"
 #import "palette.typ": default-palette
 #import "geometry.typ": (
-  add as _add,
-  scale as _scale,
   dot as _dot,
   unit as _unit,
   dot-2d as _dot-2d,
@@ -11,7 +9,6 @@
 #import "lighting.typ": (
   toward-light as _toward-light,
   face-brightness as _face-brightness,
-  face-visibility as _face-visibility,
 )
 #import "projection.typ": (
   device-to-cetz as _device-to-cetz,
@@ -151,6 +148,17 @@
   )
 }
 
+#let _round-stroke(value) = {
+  let base = stroke(value)
+  stroke(
+    paint: base.paint,
+    thickness: base.thickness,
+    cap: "round",
+    join: base.join,
+    dash: base.dash,
+    miter-limit: base.miter-limit,
+  )
+}
 #let _automatic-label-z(style) = {
   let fade = style.at("fade-bottom", default: none)
   if fade == none {
@@ -282,254 +290,6 @@
   )
 }
 
-#let _draw-faded-outline(points, value, config, camera) = {
-  let heights = points.map(point => point.at(2))
-  let top = calc.max(..heights)
-  let base = stroke(value)
-  let paint = if base.paint == auto { black } else { base.paint }
-  assert(
-    type(paint) == color,
-    message: "a face with fade-bottom must use a solid-color stroke",
-  )
-
-  for index in range(points.len()) {
-    let start = points.at(index)
-    let end = points.at(calc.rem(index + 1, points.len()))
-    if start.at(2) == top and end.at(2) == top {
-      cetz.draw.line(start, end, stroke: base)
-    } else if start.at(2) != end.at(2) {
-      let low = if start.at(2) < end.at(2) { start } else { end }
-      let high = if start.at(2) < end.at(2) { end } else { start }
-      let projected-high = _project(high, camera)
-      let projected-low = _project(low, camera)
-      let direction = (
-        projected-low.at(0) - projected-high.at(0),
-        projected-low.at(1) - projected-high.at(1),
-      )
-      let outline-paint = gradient.linear(
-        .._fade-stops(
-          paint,
-          config.color,
-          config.start,
-          config.end,
-        ),
-        angle: calc.atan2(direction.at(0), direction.at(1)),
-        relative: "self",
-      )
-      cetz.draw.line(
-        high,
-        low,
-        stroke: _stroke-with-paint(base, outline-paint),
-      )
-    }
-  }
-}
-
-#let _draw-faded-edge(high, low, value, config, camera) = {
-  let base = stroke(value)
-  let paint = if base.paint == auto { black } else { base.paint }
-  let projected-high = _project(high, camera)
-  let projected-low = _project(low, camera)
-  let direction = (
-    projected-low.at(0) - projected-high.at(0),
-    projected-low.at(1) - projected-high.at(1),
-  )
-  let outline-paint = gradient.linear(
-    .._fade-stops(
-      paint,
-      config.color,
-      config.start,
-      config.end,
-    ),
-    angle: calc.atan2(direction.at(0), direction.at(1)),
-    relative: "self",
-  )
-  cetz.draw.line(
-    (projected-high.at(0), -projected-high.at(1), 0),
-    (projected-low.at(0), -projected-low.at(1), 0),
-    stroke: _stroke-with-paint(base, outline-paint),
-  )
-}
-
-#let _draw-beveled-outline(
-  width,
-  depth,
-  bottom,
-  top,
-  top-bevel,
-  bottom-bevel,
-  style,
-  camera,
-  draw-top,
-) = {
-  let value = style.at("stroke", default: 1pt + black)
-  let internal-value = style.at("internal-stroke", default: none)
-  if internal-value == auto {
-    internal-value = value
-  }
-  if value == none and internal-value == none {
-    return
-  }
-  let top-shoulder = top - top-bevel
-  let bottom-shoulder = bottom + bottom-bevel
-  let outer = (
-    (0, 0),
-    (width, 0),
-    (width, depth),
-    (0, depth),
-  )
-  let top-ring = (
-    (top-bevel, top-bevel, top),
-    (width - top-bevel, top-bevel, top),
-    (width - top-bevel, depth - top-bevel, top),
-    (top-bevel, depth - top-bevel, top),
-  )
-  let bottom-ring = (
-    (bottom-bevel, bottom-bevel, bottom),
-    (width - bottom-bevel, bottom-bevel, bottom),
-    (width - bottom-bevel, depth - bottom-bevel, bottom),
-    (bottom-bevel, depth - bottom-bevel, bottom),
-  )
-  let fade-bottom = style.at("fade-bottom", default: none)
-  let fade-config = if fade-bottom == none {
-    none
-  } else {
-    _fade-config(fade-bottom)
-  }
-  let project = point => {
-    let projected = _project(point, camera)
-    (projected.at(0), -projected.at(1), 0)
-  }
-  let azimuth = camera.at("azimuth", default: 0deg)
-  let visible-sides = (
-    if calc.sin(azimuth) < 0 { "back" } else { "front" },
-    if calc.cos(azimuth) < 0 { "left" } else { "right" },
-  )
-  let side-edges = (
-    front: (0, 1),
-    right: (1, 2),
-    back: (2, 3),
-    left: (3, 0),
-  )
-  let visible-edges = ()
-  let visible-corners = ()
-  for side in visible-sides {
-    let horizontal = _face-horizontal(camera, side)
-    let projected-length = calc.sqrt(_dot-2d(horizontal, horizontal))
-    if projected-length > 1e-6 {
-      let edge = side-edges.at(side)
-      visible-edges.push(edge)
-      for corner in edge {
-        if corner not in visible-corners {
-          visible-corners.push(corner)
-        }
-      }
-    }
-  }
-
-  if value != none {
-    if draw-top {
-      cetz.draw.line(..top-ring.map(project), close: true, stroke: value)
-    }
-    if fade-config == none {
-      for edge in visible-edges {
-        cetz.draw.line(
-          project(bottom-ring.at(edge.first())),
-          project(bottom-ring.at(edge.last())),
-          stroke: value,
-        )
-      }
-    }
-    for index in visible-corners {
-      let corner = outer.at(index)
-      let lower = (corner.at(0), corner.at(1), bottom-shoulder)
-      let upper = (corner.at(0), corner.at(1), top-shoulder)
-      if fade-config == none {
-        let points = (
-          bottom-ring.at(index),
-          lower,
-          upper,
-          top-ring.at(index),
-        )
-        cetz.draw.line(..points.map(project), stroke: value)
-      } else {
-        _draw-faded-edge(upper, lower, value, fade-config, camera)
-        let points = (upper, top-ring.at(index))
-        cetz.draw.line(..points.map(project), stroke: value)
-      }
-    }
-  }
-
-  if internal-value != none {
-    for edge in visible-edges {
-      let start = edge.first()
-      let end = edge.last()
-      if top-bevel > 0 {
-        cetz.draw.line(
-          project((
-            outer.at(start).at(0),
-            outer.at(start).at(1),
-            top-shoulder,
-          )),
-          project((
-            outer.at(end).at(0),
-            outer.at(end).at(1),
-            top-shoulder,
-          )),
-          stroke: internal-value,
-        )
-        if not draw-top {
-          cetz.draw.line(
-            project(top-ring.at(start)),
-            project(top-ring.at(end)),
-            stroke: internal-value,
-          )
-        }
-      }
-      if bottom-bevel > 0 {
-        cetz.draw.line(
-          project((
-            outer.at(start).at(0),
-            outer.at(start).at(1),
-            bottom-shoulder,
-          )),
-          project((
-            outer.at(end).at(0),
-            outer.at(end).at(1),
-            bottom-shoulder,
-          )),
-          stroke: internal-value,
-        )
-      }
-    }
-  }
-}
-
-#let _queue-beveled-outline(
-  width,
-  depth,
-  bottom,
-  top,
-  top-bevel,
-  bottom-bevel,
-  style,
-  camera,
-) = {
-  cetz.draw.set-ctx(ctx => {
-    ctx.shared-state.semi.outlines.push((
-      width: width,
-      depth: depth,
-      bottom: bottom,
-      top: top,
-      top-bevel: top-bevel,
-      bottom-bevel: bottom-bevel,
-      style: style,
-      camera: camera,
-    ))
-    ctx
-  })
-}
-
 #let _material-style(material, variant, occurrence, local-style, palette) = {
   assert.eq(
     local-style.pos(),
@@ -587,101 +347,8 @@
   result
 }
 
-#let _render-face(
-  points,
-  normal,
-  style,
-  shading,
-  light,
-  camera,
-  visibility,
-) = {
-  let face-style = style
-  let fade-bottom = face-style.at("fade-bottom", default: none)
-  if "fade-bottom" in face-style {
-    let _ = face-style.remove("fade-bottom")
-  }
-  if "base-color" in face-style {
-    let _ = face-style.remove("base-color")
-  }
-  let fill = face-style.at("fill", default: none)
-  let brightness = _face-brightness(
-    normal,
-    shading,
-    light,
-    visibility: visibility,
-  )
-  let outline = style.at("stroke", default: 1pt + black)
-  let fades = fade-bottom != none and normal.at(2) == 0
-  let config = if fades { _fade-config(fade-bottom) } else { none }
-  let geometry = if fades {
-    _fade-geometry(points, camera, config.start, config.end)
-  } else {
-    none
-  }
-  let shaded-fill = if type(fill) == color {
-    fill.darken((1 - brightness) * 100%)
-  } else {
-    fill
-  }
-
-  if fade-bottom != none and normal.at(2) < 0 {
-    return
-  }
-
-  if fades {
-    assert(
-      type(shaded-fill) == color,
-      message: "a face with fade-bottom must use a solid-color fill",
-    )
-    face-style.fill = gradient.linear(
-      .._fade-stops(
-        shaded-fill,
-        config.color,
-        geometry.start,
-        geometry.end,
-      ),
-      angle: geometry.angle,
-      relative: "self",
-    )
-    face-style.stroke = none
-  } else {
-    face-style.fill = shaded-fill
-    if "stroke" in face-style {
-      face-style.stroke = outline
-    }
-  }
-
-  cetz.draw.line(
-    ..points,
-    close: true,
-    ..face-style,
-  )
-
-  if (
-    shading in ("flat", "fancy")
-    and fill != none
-    and type(fill) != color
-  ) {
-    cetz.draw.line(
-      ..points,
-      close: true,
-      fill: black.transparentize(brightness * 100%),
-      stroke: none,
-    )
-  }
-
-  if fades and outline != none {
-    _draw-faded-outline(
-      points,
-      outline,
-      config,
-      camera,
-    )
-  }
-}
-
 #let _render-scene-face(face, volume) = {
+  let contours = face.contours
   let normal = _unit(face.normal)
   let style = volume.style
   let bevel-face = (
@@ -702,6 +369,7 @@
     normal,
     volume.shading,
     volume.light,
+    visibility: face.light-visibility,
   )
   let shaded-fill = if type(fill) == color {
     fill.darken((1 - brightness) * 100%)
@@ -711,7 +379,7 @@
   let face-fill = if fades {
     let config = _fade-config(fade-bottom)
     let points = ()
-    for contour in face.contours {
+    for contour in contours {
       points += contour
     }
     let geometry = _fade-geometry(
@@ -735,7 +403,7 @@
   }
 
   cetz.draw.compound-path({
-    for contour in face.contours {
+    for contour in contours {
       cetz.draw.line(..contour, close: true)
     }
   }, fill: face-fill, fill-rule: "even-odd", stroke: none)
@@ -746,7 +414,7 @@
     and type(fill) != color
   ) {
     cetz.draw.compound-path({
-      for contour in face.contours {
+      for contour in contours {
         cetz.draw.line(..contour, close: true)
       }
     }, fill: black.transparentize(brightness * 100%), fill-rule: "even-odd", stroke: none)
@@ -782,16 +450,33 @@
 #let _render-scene-edge(edge, volumes, value) = {
   if edge.kind == "bevel" {
     let values = edge.materials.map(
+      material => {
+        let style = volumes.at(material).style
+        let internal = style.at("internal-stroke", default: none)
+        if internal == auto {
+          style.at("stroke", default: value)
+        } else {
+          internal
+        }
+      },
+    ).filter(value => value != none)
+    if values.len() == 0 {
+      return
+    }
+    value = values.last()
+  } else {
+    let values = edge.materials.map(
       material => volumes.at(material).style.at(
-        "internal-stroke",
-        default: none,
+        "stroke",
+        default: value,
       ),
     ).filter(value => value != none)
     if values.len() == 0 {
       return
     }
-    value = values.first()
+    value = values.last()
   }
+  value = _round-stroke(value)
   if edge.materials.len() == 1 {
     let volume = volumes.at(edge.materials.first())
     let fade-bottom = volume.style.at("fade-bottom", default: none)
@@ -830,26 +515,6 @@
     }
   }
   cetz.draw.line(edge.start, edge.end, stroke: value)
-}
-
-#let _face(points, normal, style, shading, light, camera) = {
-  if style.at("fade-bottom", default: none) != none and normal.at(2) < 0 {
-    return
-  }
-  cetz.draw.set-ctx(ctx => {
-    let state = ctx.shared-state.semi
-    state.faces.push((
-      layer: state.layers.len(),
-      points: points,
-      normal: normal,
-      style: style,
-      shading: shading,
-      light: light,
-      camera: camera,
-    ))
-    ctx.shared-state.semi = state
-    ctx
-  })
 }
 
 #let _cut-config(cut) = {
@@ -892,49 +557,57 @@
 #let _draw-scene(debug: none) = {
   cetz.draw.set-ctx(ctx => {
     let state = ctx.shared-state.semi
-    let diagnostics = ()
-    let layer-names = state.layers.keys()
-    for (index, face) in state.faces.enumerate() {
-      let visibility = _face-visibility(
-        face,
-        index,
-        state.faces,
-        face.shading,
-        face.light,
+    let cut = _cut-config(state.cut)
+    let volumes = if cut == none {
+      state.volumes
+    } else {
+      _scene.cut-line(
+        state.volumes,
+        cut.plane,
+        keep: cut.keep,
       )
-      let cosine = calc.max(0, _dot(
-        face.normal,
-        _toward-light(face.light),
-      ))
-      diagnostics.push((
-        index: index,
-        layer: face.layer,
-        layer-name: if face.layer < layer-names.len() {
-          layer-names.at(face.layer)
-        } else {
-          str(face.layer)
-        },
-        points: face.points,
-        center: _scale(
-          face.points.fold(
-            (0, 0, 0),
-            (sum, point) => _add(sum, point),
-          ),
-          1 / face.points.len(),
-        ),
-        normal: face.normal,
-        cosine: cosine,
-        visibility: visibility,
-        brightness: _face-brightness(
-          face.normal,
-          face.shading,
-          face.light,
-          visibility: visibility,
-        ),
-      ))
     }
-    state.face-diagnostics = diagnostics
-    ctx.shared-state.semi = state
+    let view = _ortho-view(
+      state.camera.at("elevation", default: 0deg),
+      state.camera.at("azimuth", default: 0deg),
+    )
+    let toward-light = _toward-light(state.light)
+    if debug != none and debug != "topology" {
+      let diagnostics = ()
+      let seen = ()
+      for face in _kernel.scene-surfaces(
+        volumes,
+        view,
+        toward-light,
+        shadows: state.shading != "none",
+        diagnostics: true,
+      ) {
+        if face.source not in seen {
+          seen.push(face.source)
+          let volume = volumes.at(face.material)
+          let normal = _unit(face.normal)
+          let visibility = face.light-visibility
+          diagnostics.push((
+            index: face.source,
+            layer: volume.layer,
+            layer-name: volume.name,
+            points: face.contours.at(0, default: ()),
+            center: face.center,
+            normal: normal,
+            cosine: calc.max(0, _dot(normal, toward-light)),
+            visibility: visibility,
+            brightness: _face-brightness(
+              normal,
+              volume.shading,
+              volume.light,
+              visibility: visibility,
+            ),
+          ))
+        }
+      }
+      state.face-diagnostics = diagnostics
+      ctx.shared-state.semi = state
+    }
     ctx
   })
 
@@ -950,40 +623,26 @@
         keep: cut.keep,
       )
     }
+    let view = _ortho-view(
+      state.camera.at("elevation", default: 0deg),
+      state.camera.at("azimuth", default: 0deg),
+    )
     if debug == "topology" {
       _scene.render-topology-debug(
         volumes,
-        view: _ortho-view(
-          state.camera.at("elevation", default: 0deg),
-          state.camera.at("azimuth", default: 0deg),
-        ),
+        view: view,
         crease-angle: state.crease-angle,
       )
-    } else if state.masked {
+    } else {
       _scene.render(
         volumes,
-        view: _ortho-view(
-          state.camera.at("elevation", default: 0deg),
-          state.camera.at("azimuth", default: 0deg),
-        ),
+        view: view,
+        toward-light: _toward-light(state.light),
+        shadows: state.shading != "none",
         crease-angle: state.crease-angle,
         render-face: _render-scene-face,
         render-edge: _render-scene-edge,
       )
-    } else {
-      cetz.draw.on-layer(-1, {
-        for (index, face) in state.faces.enumerate() {
-          _render-face(
-            face.points,
-            face.normal,
-            face.style,
-            face.shading,
-            face.light,
-            face.camera,
-            state.face-diagnostics.at(index).visibility,
-          )
-        }
-      })
     }
   })
 }
@@ -994,29 +653,6 @@
       ctx.shared-state.semi.volumes,
       _horizontal-section(section),
     )
-  })
-}
-
-#let _draw-outlines() = {
-  cetz.draw.get-ctx(ctx => {
-    let state = ctx.shared-state.semi
-    if not state.masked and state.debug != "topology" {
-      cetz.draw.on-layer(-0.5, {
-        for (index, outline) in state.outlines.enumerate() {
-          _draw-beveled-outline(
-            outline.width,
-            outline.depth,
-            outline.bottom,
-            outline.top,
-            outline.top-bevel,
-            outline.bottom-bevel,
-            outline.style,
-            outline.camera,
-            index == state.outlines.len() - 1,
-          )
-        }
-      })
-    }
   })
 }
 
@@ -1063,7 +699,6 @@
     } else {
       calc.max(..state.volumes.map(volume => volume.top))
     }
-    state.masked = true
     ctx.shared-state.semi = state
     ctx
   })
@@ -1178,220 +813,10 @@
     }
     let top-bevel = bevel.top
     let bottom-bevel = bevel.bottom
-    let top-shoulder = top - top-bevel
-    let bottom-shoulder = bottom + bottom-bevel
-    let render-style = resolved-style
-    if state.shading == "fancy" {
-      render-style.stroke = none
-    }
-    let bevel-style = render-style
-    let bevel-color = resolved-style.at("base-color", default: none)
-    if bevel-color != none {
-      bevel-style.fill = bevel-color
-    }
 
     cetz.draw.group(
       name: name,
       {
-        _face(
-          (
-            (0, depth, bottom-shoulder),
-            (width, depth, bottom-shoulder),
-            (width, depth, top-shoulder),
-            (0, depth, top-shoulder),
-          ),
-          (0, 1, 0),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        _face(
-          (
-            (bottom-bevel, bottom-bevel, bottom),
-            (bottom-bevel, depth - bottom-bevel, bottom),
-            (width - bottom-bevel, depth - bottom-bevel, bottom),
-            (width - bottom-bevel, bottom-bevel, bottom),
-          ),
-          (0, 0, -1),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        _face(
-          (
-            (0, 0, bottom-shoulder),
-            (0, 0, top-shoulder),
-            (0, depth, top-shoulder),
-            (0, depth, bottom-shoulder),
-          ),
-          (-1, 0, 0),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        _face(
-          (
-            (width, 0, bottom-shoulder),
-            (width, depth, bottom-shoulder),
-            (width, depth, top-shoulder),
-            (width, 0, top-shoulder),
-          ),
-          (1, 0, 0),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        if top-bevel > 0 {
-          _face(
-            (
-              (0, depth, top-shoulder),
-              (width, depth, top-shoulder),
-              (width - top-bevel, depth - top-bevel, top),
-              (top-bevel, depth - top-bevel, top),
-            ),
-            _unit((0, 1, 1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (0, 0, top-shoulder),
-              (top-bevel, top-bevel, top),
-              (width - top-bevel, top-bevel, top),
-              (width, 0, top-shoulder),
-            ),
-            _unit((0, -1, 1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (0, 0, top-shoulder),
-              (0, depth, top-shoulder),
-              (top-bevel, depth - top-bevel, top),
-              (top-bevel, top-bevel, top),
-            ),
-            _unit((-1, 0, 1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (width, 0, top-shoulder),
-              (width - top-bevel, top-bevel, top),
-              (width - top-bevel, depth - top-bevel, top),
-              (width, depth, top-shoulder),
-            ),
-            _unit((1, 0, 1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-        }
-        if bottom-bevel > 0 {
-          _face(
-            (
-              (0, depth, bottom-shoulder),
-              (bottom-bevel, depth - bottom-bevel, bottom),
-              (width - bottom-bevel, depth - bottom-bevel, bottom),
-              (width, depth, bottom-shoulder),
-            ),
-            _unit((0, 1, -1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (0, 0, bottom-shoulder),
-              (width, 0, bottom-shoulder),
-              (width - bottom-bevel, bottom-bevel, bottom),
-              (bottom-bevel, bottom-bevel, bottom),
-            ),
-            _unit((0, -1, -1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (0, 0, bottom-shoulder),
-              (bottom-bevel, bottom-bevel, bottom),
-              (bottom-bevel, depth - bottom-bevel, bottom),
-              (0, depth, bottom-shoulder),
-            ),
-            _unit((-1, 0, -1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-          _face(
-            (
-              (width, 0, bottom-shoulder),
-              (width, depth, bottom-shoulder),
-              (width - bottom-bevel, depth - bottom-bevel, bottom),
-              (width - bottom-bevel, bottom-bevel, bottom),
-            ),
-            _unit((1, 0, -1)),
-            bevel-style,
-            state.shading,
-            state.light,
-            state.camera,
-          )
-        }
-        _face(
-          (
-            (top-bevel, top-bevel, top),
-            (width - top-bevel, top-bevel, top),
-            (width - top-bevel, depth - top-bevel, top),
-            (top-bevel, depth - top-bevel, top),
-          ),
-          (0, 0, 1),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        _face(
-          (
-            (0, 0, bottom-shoulder),
-            (width, 0, bottom-shoulder),
-            (width, 0, top-shoulder),
-            (0, 0, top-shoulder),
-          ),
-          (0, -1, 0),
-          render-style,
-          state.shading,
-          state.light,
-          state.camera,
-        )
-        if state.shading == "fancy" {
-          _queue-beveled-outline(
-            width,
-            depth,
-            bottom,
-            top,
-            top-bevel,
-            bottom-bevel,
-            resolved-style,
-            state.camera,
-          )
-        }
-
         cetz.draw.anchor("bottom", (width / 2, depth / 2, bottom))
         cetz.draw.anchor("top", (width / 2, depth / 2, top))
         cetz.draw.anchor("center", (width / 2, depth / 2, middle))
@@ -1422,10 +847,13 @@
       let fill = resolved-style.at("fill", default: none)
       for placement in placements {
         ctx.shared-state.semi.volumes.push((
+          name: name,
+          layer: ctx.shared-state.semi.layers.len(),
           shapes: placement.shapes,
           bottom: placement.bottom,
           top: placement.top,
           top-bevel: top-bevel,
+          bottom-bevel: bottom-bevel,
           top-fill: fill,
           side-fill: fill,
           section-fill: fill,
@@ -1439,10 +867,6 @@
           ),
         ))
       }
-      ctx.shared-state.semi.masked = (
-        ctx.shared-state.semi.masked
-          or mask != auto
-      )
       ctx.shared-state.semi.material-counts.insert(
         family-name,
         occurrence + 1,
@@ -1548,11 +972,8 @@
         ctx.shared-state.semi = (
           size: size,
           height: 0,
-          faces: (),
           face-diagnostics: (),
-          outlines: (),
           volumes: (),
-          masked: cut != none,
           face-contents: (),
           layers: (:),
           material-counts: (:),
@@ -1590,10 +1011,6 @@
           body
           _draw-section(section)
         }
-      }
-
-      if section == none {
-        _draw-outlines()
       }
 
       if section == none and debug != "topology" {
