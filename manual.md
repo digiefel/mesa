@@ -1,4 +1,4 @@
-# Mesa API
+# Mesa: Usage Manual
 
 A sample is built from bottom to top inside `layer-stack`. Layer thicknesses
 and coordinates represent nanometres by default.
