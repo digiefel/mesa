@@ -14,6 +14,7 @@
     gate: (10, 0),
     metal: (20, 0),
   ),
+  path-tolerance: 1%,
 )
 
 #let draw-shapes(shapes, fill) = {

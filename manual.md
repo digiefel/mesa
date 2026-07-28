@@ -1,7 +1,8 @@
 # Mesa: Usage Manual
 
-A sample is built from bottom to top inside `layer-stack`. Layer thicknesses
-and coordinates represent nanometres by default.
+A sample is built from bottom to top inside `layer-stack`. Mesa uses unitless
+model coordinates; the examples in this manual treat one model unit as one
+nanometre.
 
 ```typ
 #import "@preview/mesa:0.1.0" as semi
@@ -58,6 +59,7 @@ layer(
   label-anchor: none,
   label-name: none,
   bevel: auto,
+  stroke: auto,
   internal-stroke: auto,
   mask: auto,
   ..style,
@@ -71,7 +73,7 @@ layer(
 - `label` accepts Typst content.
 - `label-*` forwards to `draw.content`. Short positions and projection faces
   are relative to the layer: `"front"` resolves to `"layer-name.front"`.
-- `bevel` and `internal-stroke` override the stack defaults.
+- `bevel`, `stroke`, and `internal-stroke` override the stack defaults.
 - `mask` accepts polygon geometry.
 - `..style` overrides material properties for this layer.
 
@@ -87,6 +89,7 @@ By default, `label` is projected onto the centre of the layer's front face.
     gate: (10, 0), // layer spec, i.e. 10/0
     metal: (20, 0),
   ),
+  path-tolerance: 1%,
 )
 
 #let sample = {
@@ -102,21 +105,36 @@ By default, `label` is projected onto the centre of the layer's front face.
 #semi.layer-stack(sample, size: layout.size)
 ```
 
-`gds` reads the selected boundaries, converts their coordinates to nanometres,
-and returns `origin`, `size`, and the polygon arrays named in `layers`.
-`origin` is the lower-left coordinate of those boundaries in the GDS file;
-the returned polygons start at `(0, 0)`. `semi.debug.gds(data)` lists the
-library units, cells, and layers.
+`gds` reads boundaries and width-aware paths from the selected flat cell. Paths
+are converted to polygons before they enter the layer-stack renderer. The
+result contains `origin`, `size`, `unit-meters`, and the polygon arrays named
+in `layers`.
+
+Coordinates are expressed in the user unit declared by the GDS library.
+`unit-meters` gives the physical size of one returned coordinate unit.
+`origin` is the lower-left coordinate of the selected geometry in those units;
+the returned polygons start at `(0, 0)`. Layer thicknesses, etch depths, and
+`layer-stack` size must use the same model unit as the mask geometry.
+
+`path-tolerance` optionally simplifies each path centreline before its width
+is applied. A ratio is relative to that path's width: `1%` permits a centreline
+deviation of one percent of the width. The default, `0`, preserves every path
+vertex. Referenced-cell hierarchy is not currently expanded.
+
+`semi.debug.gds(data)` lists the library units, cells, and layers.
 
 `layer(..., mask:)` deposits over the selected polygons.
 `etch(depth:, mask:)` is used alongside `layer` in a sample body. When it is
-reached, it removes `depth` nanometres from the current surface wherever the
+reached, it removes `depth` model units from the current surface wherever the
 mask is present. Later commands build on the etched sample. In the example,
-5 nm is removed through `layout.metal` before the contacts are deposited.
+five units are removed through `layout.metal` before the contacts are
+deposited.
 
 `mask: auto` covers the complete sample. `semi.mask.invert(geometry)` selects
-the geometric complement within the sample bounds. Its short form after
-`import semi: *` is `mask.invert(geometry)`.
+the geometric complement within the sample bounds.
+`semi.mask.merge(geometry)` unions overlapping polygons into a normalized
+mask. Their short forms after `import semi: *` are `mask.invert(geometry)` and
+`mask.merge(geometry)`.
 
 ### Materials
 
@@ -229,11 +247,12 @@ layer-stack(
   ),
   bevel: (top: 0.5, bottom: 0.25),
   internal-stroke: none,
+  crease-angle: 0deg,
   palette: (:),
   length: .8mm,
   baseline: none,
   background: none,
-  stroke: none,
+  stroke: auto,
   padding: none,
   cut: none,
   section: none,
@@ -242,8 +261,8 @@ layer-stack(
 )
 ```
 
-`size` is `(x-width, y-depth)`. `length` sets the rendered length of one
-nanometre and defaults to `.8mm`.
+`size` is `(x-width, y-depth)`. `length` sets the rendered length of one model
+unit and defaults to `.8mm`.
 
 ### Coordinates and camera
 
@@ -272,8 +291,17 @@ travels along `+y`; positive azimuth rotates toward `+x`. Elevation `0deg`
 lies in the `x-y` plane; positive elevation makes the light source appear higher.
 `intensity` accepts a number from `0` to `1` or an equivalent ratio.
 
-`shading: "none"` uses the material colors directly. `"flat"` applies lighting
-and shadows. `"fancy"` also adds shaded bevels to each layer.
+All three shading modes use the same scene renderer and hidden-surface
+occlusion:
+
+- `"none"` uses material colours directly, without light modulation;
+- `"flat"` applies directional Lambertian lighting to unbevelled geometry,
+  without cast shadows;
+- `"fancy"` adds bevel faces and projected cast shadows.
+
+Fancy shadows are computed by projecting other scene faces along the light
+direction and clipping those shadow polygons to each receiving surface. Faces
+within one patterned layer can shadow one another.
 
 `bevel` accepts one number, one ratio, or separate top and bottom values:
 
@@ -283,10 +311,24 @@ bevel: 8%
 bevel: (top: 0.5, bottom: 0.25)
 ```
 
-Ratios are relative to the layer thickness.
+Ratios are relative to the layer thickness. Bevels are only generated for
+`shading: "fancy"`.
 
-`stroke` styles exterior outlines. `internal-stroke` styles internal contours,
-including bevel contours. `auto` reuses the exterior stroke.
+`crease-angle` suppresses outlines between adjacent faces of the same material
+when the angle between their normals is at most the given value. It accepts an
+angle from `0deg` to `90deg`; the default only joins coplanar faces. This is
+useful for treating a finely segmented curve as a smooth outline without
+changing its geometry.
+
+`stroke` supplies an exterior-outline default for the complete stack.
+`stroke: auto` preserves each material's stroke. A layer-level `stroke`
+overrides the stack value, which in turn overrides the material. `none`
+removes the corresponding outlines.
+
+`internal-stroke` controls bevel contours separately. A layer-level value
+overrides the stack value. The stack default is `none`; setting it to `auto`
+reuses each layer's resolved exterior stroke. Edge segments use round caps so
+adjacent segments meet without visible rectangular gaps.
 
 ### Cross-sections and cuts
 
@@ -335,12 +377,15 @@ i.e. they can only run along the `z` axis.
 - `normals()` draws geometric surface normals.
 
 `faces: auto` selects camera-visible side faces. `layers` filters by layer name.
-`semi.debug.topology(body, ..layer-stack-arguments)` displays outline,
-material, internal, and occluded edge classifications.
+`face-info` reports the cosine, light visibility, and brightness produced by
+the scene renderer. `semi.debug.topology(body, ..layer-stack-arguments)`
+displays outline, material, internal, and occluded edge classifications using
+the same `crease-angle` as the normal renderer.
 
 `semi.debug.gds(data)` lists the units, cells, and layers in a GDS file.
 
 ### Canvas
 
-`length`, `baseline`, `background`, `stroke`, and `padding` pass through to
-`cetz.canvas`. `canvas-debug` controls CeTZ's bounding-box debugger.
+`length`, `baseline`, `background`, and `padding` pass through to `cetz.canvas`.
+`stroke` belongs to Mesa's layer renderer as described above.
+`canvas-debug` controls CeTZ's bounding-box debugger.

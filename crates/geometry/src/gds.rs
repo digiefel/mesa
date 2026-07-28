@@ -91,9 +91,7 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
             request.cell
         ));
     }
-    if !request.path_tolerance.is_finite()
-        || !(0.0..=1.0).contains(&request.path_tolerance)
-    {
+    if !request.path_tolerance.is_finite() || !(0.0..=1.0).contains(&request.path_tolerance) {
         return Err(format!(
             "GDS path tolerance must be a fraction between 0 and 1; got {}",
             request.path_tolerance,
@@ -149,8 +147,8 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         }
     }
 
-    let [min_x, min_y, max_x, max_y] =
-        bounds.ok_or_else(|| "selected GDS layers contain no boundary polygons".to_string())?;
+    let [min_x, min_y, max_x, max_y] = bounds
+        .ok_or_else(|| "selected GDS layers contain no boundary or path geometry".to_string())?;
     let origin = [
         min_x * user_units_per_database_unit,
         min_y * user_units_per_database_unit,
@@ -195,10 +193,7 @@ fn update_bounds(bounds: &mut Option<[f64; 4]>, contour: &GdsContour) {
     }
 }
 
-fn path_to_shapes(
-    path: &gds21::GdsPath,
-    relative_tolerance: f64,
-) -> Result<GdsShapes, String> {
+fn path_to_shapes(path: &gds21::GdsPath, relative_tolerance: f64) -> Result<GdsShapes, String> {
     let width = path.width.ok_or_else(|| {
         format!(
             "GDS path on layer {}/{} has no width and cannot become an area mask",
