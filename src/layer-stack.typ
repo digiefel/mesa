@@ -19,9 +19,8 @@
   resolve-known-anchor as _resolve-known-anchor,
   project as _project,
   face-horizontal as _face-horizontal,
-  project-face-content,
-  face-content-angle as _face-content-angle,
 )
+#import "draw.typ" as semi-draw
 #import "scene.typ" as _scene
 #import "kernel.typ" as _kernel
 
@@ -152,26 +151,6 @@
   )
 }
 
-#let _position-component-valid(value) = {
-  type(value) in (
-    int,
-    float,
-    length,
-    ratio,
-    type(50% + 1pt),
-    type(center),
-  )
-}
-
-#let _validate-position(value, name: "position") = {
-  assert(
-    type(value) == array
-      and value.len() == 2
-      and value.all(_position-component-valid),
-    message: name + " must be an (x, z) pair",
-  )
-}
-
 #let _automatic-label-z(style) = {
   let fade = style.at("fade-bottom", default: none)
   if fade == none {
@@ -188,76 +167,16 @@
   (1 - moment / mass) * 100%
 }
 
-#let _resolve-position-component(value, extent, visual-middle, ctx, axis) = {
-  let kind = type(value)
-  if kind in (int, float) {
-    float(value)
-  } else if kind == ratio {
-    extent * (value / 100%)
-  } else if kind == length {
-    float(value.to-absolute() / ctx.length)
-  } else if kind == type(50% + 1pt) {
-    (
-      extent * (value.ratio / 100%)
-        + float(value.length.to-absolute() / ctx.length)
-    )
+#let _label-coordinate(layer, value) = {
+  if type(value) == str and not value.contains(".") {
+    layer + "." + value
+  } else if type(value) == dictionary and "to" in value {
+    let result = value
+    result.to = _label-coordinate(layer, value.to)
+    result
   } else {
-    assert(
-      value.axis() == if axis == "x" { "horizontal" } else { "vertical" },
-      message: "invalid " + axis + " alignment in position",
-    )
-    let amount = if axis == "x" {
-      if value in (left, start) {
-        0
-      } else if value == center {
-        .5
-      } else {
-        1
-      }
-    } else {
-      if value == bottom {
-        0
-      } else if value == horizon {
-        visual-middle / 100%
-      } else {
-        1
-      }
-    }
-    extent * amount
+    value
   }
-}
-
-#let _face-position(layer, face, position, ctx, camera) = {
-  let horizontal-extent = if face in ("front", "back") {
-    layer.width
-  } else {
-    layer.depth
-  }
-  let horizontal = _resolve-position-component(
-    position.at(0),
-    horizontal-extent,
-    50%,
-    ctx,
-    "x",
-  )
-  let vertical = _resolve-position-component(
-    position.at(1),
-    layer.top - layer.bottom,
-    layer.visual-middle,
-    ctx,
-    "z",
-  )
-  let point = if face == "front" {
-    (horizontal, 0, layer.bottom + vertical)
-  } else if face == "back" {
-    (horizontal, layer.depth, layer.bottom + vertical)
-  } else if face == "right" {
-    (layer.width, layer.depth - horizontal, layer.bottom + vertical)
-  } else {
-    (0, horizontal, layer.bottom + vertical)
-  }
-  let projected = _project(point, camera)
-  (projected.at(0), -projected.at(1), 0)
 }
 
 #let _fade-geometry(points, camera, start, end) = {
@@ -1155,8 +1074,11 @@
   material: auto,
   variant: auto,
   label: none,
-  label-transform: auto,
-  label-position: (center, horizon),
+  label-position: "front",
+  label-project: auto,
+  label-angle: 0deg,
+  label-anchor: none,
+  label-name: none,
   bevel: auto,
   internal-stroke: auto,
   mask: auto,
@@ -1183,11 +1105,9 @@
     )
   }
   assert(
-    label-transform == auto
-      or label-transform in ("none", "rotate", "project"),
-    message: "label-transform must be auto, \"none\", \"rotate\", or \"project\"",
+    label-project in (auto, none) or type(label-project) == str,
+    message: "label-project must be auto, none, or a layer face anchor",
   )
-  _validate-position(label-position, name: "label-position")
   assert(
     type(thickness) in (int, float),
     message: "layer thickness must be a number",
@@ -1240,6 +1160,9 @@
       },
     )
     let visual-middle = _automatic-label-z(resolved-style)
+    let visual-middle-z = bottom + (
+      top - bottom
+    ) * (visual-middle / 100%)
     let bevel = if state.shading == "fancy" {
       _bevel-config(
         if bevel == auto { state.bevel } else { bevel },
@@ -1470,10 +1393,10 @@
         cetz.draw.anchor("bottom", (width / 2, depth / 2, bottom))
         cetz.draw.anchor("top", (width / 2, depth / 2, top))
         cetz.draw.anchor("center", (width / 2, depth / 2, middle))
-        cetz.draw.anchor("front", (width / 2, 0, middle))
-        cetz.draw.anchor("back", (width / 2, depth, middle))
-        cetz.draw.anchor("left", (0, depth / 2, middle))
-        cetz.draw.anchor("right", (width, depth / 2, middle))
+        cetz.draw.anchor("front", (width / 2, 0, visual-middle-z))
+        cetz.draw.anchor("back", (width / 2, depth, visual-middle-z))
+        cetz.draw.anchor("left", (0, depth / 2, visual-middle-z))
+        cetz.draw.anchor("right", (width, depth / 2, visual-middle-z))
         cetz.draw.anchor("front-left", (0, 0, middle))
         cetz.draw.anchor("front-right", (width, 0, middle))
         cetz.draw.anchor("back-left", (0, depth, middle))
@@ -1531,12 +1454,16 @@
       ))
       if label != none {
         ctx.shared-state.semi.face-contents.push((
-          target: name,
+          position: _label-coordinate(name, label-position),
           body: label,
-          face: auto,
-          transform: label-transform,
-          anchor: "center",
-          position: label-position,
+          project: if label-project in (auto, none) {
+            label-project
+          } else {
+            _label-coordinate(name, label-project)
+          },
+          angle: label-angle,
+          anchor: label-anchor,
+          name: label-name,
         ))
       }
       ctx
@@ -1561,7 +1488,6 @@
   bevel: (top: 0.5, bottom: 0.25),
   internal-stroke: none,
   palette: (:),
-  label-transform: "project",
   length: .8mm,
   baseline: none,
   background: none,
@@ -1591,10 +1517,6 @@
   assert(
     type(canvas-debug) == bool,
     message: "canvas-debug must be a boolean",
-  )
-  assert(
-    label-transform in ("none", "rotate", "project"),
-    message: "label-transform must be \"none\", \"rotate\", or \"project\"",
   )
   assert(
     shading in ("none", "flat", "fancy"),
@@ -1667,51 +1589,14 @@
       if section == none and debug != "topology" {
         cetz.draw.on-layer(1, {
           cetz.draw.get-ctx(ctx => {
-          let label-face = if calc.sin(azimuth) < 0 {
-            "back"
-          } else {
-            "front"
-          }
           for item in ctx.shared-state.semi.face-contents {
-            let face = if item.face == auto {
-              label-face
-            } else {
-              item.face
-            }
-            let layer = ctx.shared-state.semi.layers.at(
-              item.target,
-              default: none,
-            )
-            assert(
-              layer != none,
-              message: "unknown face-content target: " + repr(item.target),
-            )
-            let position = _face-position(
-              layer,
-              face,
+            semi-draw.content(
               item.position,
-              ctx,
-              camera,
-            )
-            let transform = if item.transform == auto {
-              label-transform
-            } else {
-              item.transform
-            }
-            let body = if transform == "project" {
-              project-face-content(item.body, camera, face)
-            } else {
-              item.body
-            }
-            cetz.draw.content(
-              position,
-              body,
+              item.body,
+              project: item.project,
               anchor: item.anchor,
-              angle: if transform == "rotate" {
-                _face-content-angle(camera, face)
-              } else {
-                0deg
-              },
+              angle: item.angle,
+              name: item.name,
             )
           }
           })

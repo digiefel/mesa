@@ -66,11 +66,10 @@ Supports:
 )
 ```
 
-`layer-stack` owns the CeTZ canvas. The functions in its body add layers to the
-stack in order. Camera, shading, and lighting can be customized with the
+`layer-stack` wraps a CeTZ canvas. The functions in its body add layers to the
+drawing in order. Camera, shading, and lighting can be customized with the
 respective `layer-stack` arguments. Other CeTZ components and primitives can be
-used in the body to annotate the stack. Relevant CeTZ canvas arguments are also
-available through `layer-stack`.
+used in the body to annotate the drawing. 
 
 ## Model
 
@@ -83,8 +82,11 @@ layer(
   material: auto,
   variant: auto,
   label: none,
-  label-transform: auto,
-  label-position: (center, horizon),
+  label-position: "front",
+  label-project: auto,
+  label-angle: 0deg,
+  label-anchor: none,
+  label-name: none,
   bevel: auto,
   internal-stroke: auto,
   mask: auto,
@@ -98,13 +100,12 @@ layer(
 - `variant` selects a 1-based style variant. By default, variants advance and
   cycle independently for each material.
 - `label` is Typst content associated with the layer.
-- `label-transform` overrides the stack's label transformation for this layer.
-  Its default, `auto`, inherits the `layer-stack` setting.
-- `label-position` places the label in the face-local `(x, z)` plane.
-- `bevel` overrides the stack's bevel configuration for this layer.
-- `internal-stroke` overrides the stack's bevel-contour stroke.
-- `mask` limits the layer to polygon geometry. `mask.invert(...)` selects its
-  complement within the scene bounds.
+- the `label-*` arguments are forwarded to the `draw.content` of the label.
+  `label-position` or explicit `label-project` are relative to the layer, so
+  `"front"` becomes `"layer-name.front"`.
+- `bevel` overrides the stack's bevel configuration for this layer (see later sections).
+- `internal-stroke` overrides the bevel-contour stroke.
+- `mask` limits the layer to polygon geometry. 
 - extra named arguments override the selected material style.
 
 ```typ
@@ -145,6 +146,7 @@ variant 1. It still advances the metal occurrence counter.
 
 `etch` removes material vertically through its mask. An omitted mask applies
 the operation to the complete scene.
+`mask.invert(...)` selects its complement within the scene bounds.
 
 ### Layer anchors and projected content
 
@@ -152,8 +154,10 @@ the operation to the complete scene.
 draw.content(
   position,
   body,
-  project: none,
+  project: auto,
+  angle: 0deg,
   anchor: none,
+  name: none,
 )
 ```
 
@@ -173,16 +177,14 @@ Every named layer exposes CeTZ anchors for its faces, edges, and corners:
 These are ordinary CeTZ coordinates. They work anywhere a CeTZ coordinate is
 accepted.
 
-The package's `draw.content` adds one named argument, `project`. It must name
-one of the six central face anchors: `front`, `back`, `left`, `right`, `top`,
-or `bottom`. Placement remains independent and is still handled entirely by
-CeTZ.
+The package's `draw.content` adds one named argument, `project`. With its
+default, `auto`, a placement at one of the six central layer-face anchors also
+selects that face's projection plane:
 
 ```typ
 draw.content(
   "resist.front",
   [Photoresist],
-  project: "resist.front",
 )
 
 draw.content(
@@ -194,22 +196,25 @@ draw.content(
 ```
 
 In the second call, `"metal-t.mid"` is only the midpoint of a named CeTZ line.
-It carries no projection metadata. `"metal.back"` independently supplies the
-projection plane.
+It therefore does not imply a projection plane. `"metal.back"` supplies one
+explicitly. `project: none` disables projection.
 
-Layer labels use the same projection implementation. Their `label-position`
-components can be alignments, numbers in model units, lengths, ratios, or
-relative lengths:
+Layer labels are shorthand for the same call:
 
 ```typ
-label-position: (center, horizon)
-label-position: (50%, 60%)
-label-position: (100% - 2pt, 50% + 1mm)
+layer(
+  "resist",
+  thickness: 20,
+  label: [Photoresist],
+  label-position: "front",
+  label-project: auto,
+)
 ```
 
-`horizon` is the visual vertical middle. For a material with `fade-bottom`, it
-is shifted toward the fully visible part of the layer. An explicit `50%`
-always denotes the geometric midpoint.
+This is equivalent to `draw.content("resist.front", [Photoresist])`.
+`label-angle`, `label-anchor`, and `label-name` forward the corresponding
+`draw.content` arguments. The four central side anchors use the visible
+vertical middle of a fading layer; all other anchors remain geometric.
 
 Material fills can be colors or the package's `hatch`, `crosshatch`, and `dots`
 tilings:
@@ -276,7 +281,6 @@ layer-stack(
   bevel: (top: 0.5, bottom: 0.25),
   internal-stroke: none,
   palette: (:),
-  label-transform: "project",
   length: .8mm,
   baseline: none,
   background: none,
@@ -345,11 +349,6 @@ substrate has no visible bottom edge, so its bottom bevel is suppressed.
 flat faces. It defaults to `none`; `auto` reuses the exterior stroke, and any
 CeTZ stroke value can give these contours a lighter or dashed style. A
 layer-level `internal-stroke` overrides the stack setting.
-
-`label-transform` controls how labels follow the layer face. `"project"`
-applies the face's full orthographic projection, including foreshortening and
-shear. `"rotate"` only aligns the baseline with the face, while `"none"` keeps
-labels horizontal on the page.
 
 `debug` accepts a CeTZ-style body evaluated after the final stack geometry and
 lighting values are known:

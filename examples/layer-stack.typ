@@ -43,7 +43,6 @@
   draw.content(
     "resist.front",
     [Photoresist],
-    project: "resist.front",
   )
 
   // an annotation
@@ -79,7 +78,6 @@
     #align(center)[
       #semi.layer-stack(
         sample,
-        label-transform: "project",
         camera: (
           azimuth: 35deg,
           elevation: 35deg,
@@ -111,7 +109,6 @@
     #align(center)[
       #semi.layer-stack(
         sample,
-        label-transform: "project",
         camera: (
           azimuth: 35deg,
           elevation: 35deg,
@@ -128,7 +125,6 @@
 #align(center)[
   #semi.layer-stack(
     sample,
-    label-transform: "project",
     camera: (
       azimuth: 35deg,
       elevation: 35deg,
