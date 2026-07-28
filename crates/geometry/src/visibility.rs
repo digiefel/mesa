@@ -162,11 +162,6 @@ pub(crate) fn scene_surfaces(
         .into_iter()
         .filter(|face| face.normal[0] != 0 || face.normal[1] != 0 || face.normal[2] >= 0)
         .collect::<Vec<_>>();
-    let light_visibility = if shadows {
-        light_visibility(&faces, toward_light)
-    } else {
-        vec![1.0; faces.len()]
-    };
     let centers: Vec<Point3F> = faces.iter().map(face_center).collect();
     let projected: Vec<ProjectedFace> = faces
         .iter()
@@ -210,69 +205,48 @@ pub(crate) fn scene_surfaces(
             }
         }
 
-        for shape in visible {
-            let depth = shape
-                .iter()
-                .flatten()
-                .filter_map(|point| projected[index].depth_at(grid.decode(*point)))
-                .sum::<f64>()
-                / shape.iter().map(Vec::len).sum::<usize>() as f64;
-            let contours = shape
-                .into_iter()
-                .map(|contour| {
-                    contour
-                        .into_iter()
-                        .filter_map(|point| {
-                            let screen = grid.decode(point);
-                            let depth = projected[index].depth_at(screen)?;
-                            Some(inverse_transform_point([screen[0], screen[1], depth], view))
-                        })
-                        .collect()
-                })
-                .collect();
-            result.push((
-                depth,
-                WireSurface {
-                    source: diagnostics.then_some(index as u32),
-                    normal: face.normal,
-                    material: face.material,
-                    center: diagnostics.then_some(centers[index]),
-                    light_visibility: light_visibility[index],
-                    contours,
-                },
-            ));
+        let light_regions = if shadows {
+            split_by_light_visibility(index, &faces, &visible, toward_light, view, grid)
+        } else {
+            vec![(1.0, visible)]
+        };
+        for (light_visibility, shapes) in light_regions {
+            for shape in shapes {
+                let depth = shape
+                    .iter()
+                    .flatten()
+                    .filter_map(|point| projected[index].depth_at(grid.decode(*point)))
+                    .sum::<f64>()
+                    / shape.iter().map(Vec::len).sum::<usize>() as f64;
+                let contours = shape
+                    .into_iter()
+                    .map(|contour| {
+                        contour
+                            .into_iter()
+                            .filter_map(|point| {
+                                let screen = grid.decode(point);
+                                let depth = projected[index].depth_at(screen)?;
+                                Some(inverse_transform_point([screen[0], screen[1], depth], view))
+                            })
+                            .collect()
+                    })
+                    .collect();
+                result.push((
+                    depth,
+                    WireSurface {
+                        source: diagnostics.then_some(index as u32),
+                        normal: face.normal,
+                        material: face.material,
+                        center: diagnostics.then_some(centers[index]),
+                        light_visibility,
+                        contours,
+                    },
+                ));
+            }
         }
     }
     result.sort_by(|left, right| left.0.total_cmp(&right.0));
     result.into_iter().map(|(_, surface)| surface).collect()
-}
-
-struct LightingFace {
-    normal: Point3F,
-    point: Point3F,
-    drop_axis: usize,
-    contours: Vec<Vec<Point2>>,
-}
-
-fn light_visibility(faces: &[Face], toward_light: Point3F) -> Vec<f64> {
-    let prepared: Vec<LightingFace> = faces.iter().map(LightingFace::new).collect();
-    prepared
-        .iter()
-        .enumerate()
-        .map(|(receiver_index, receiver)| {
-            if dot(receiver.normal, toward_light) <= EPSILON {
-                return 0.0;
-            }
-            let blocked = prepared
-                .iter()
-                .enumerate()
-                .any(|(occluder_index, occluder)| {
-                    receiver_index != occluder_index
-                        && occluder.intersects_ray(receiver.point, toward_light)
-                });
-            if blocked { 0.0 } else { 1.0 }
-        })
-        .collect()
 }
 
 fn face_center(face: &Face) -> Point3F {
@@ -294,73 +268,158 @@ fn face_center(face: &Face) -> Point3F {
     center
 }
 
-impl LightingFace {
-    fn new(face: &Face) -> Self {
-        let normal = [
-            face.normal[0] as f64,
-            face.normal[1] as f64,
-            face.normal[2] as f64,
-        ];
-        let drop_axis = normal
-            .iter()
-            .enumerate()
-            .max_by(|left, right| left.1.abs().total_cmp(&right.1.abs()))
-            .map(|(axis, _)| axis)
-            .unwrap_or(2);
-        let contours = face
-            .contours
-            .iter()
-            .map(|contour| {
-                contour
-                    .iter()
-                    .map(|point| {
-                        project_for_axis(
-                            [point[0] as f64, point[1] as f64, point[2] as f64],
-                            drop_axis,
-                        )
-                    })
-                    .collect()
-            })
-            .collect();
-        Self {
+fn split_by_light_visibility(
+    receiver_index: usize,
+    faces: &[Face],
+    visible: &SurfaceShapes,
+    toward_light: Point3F,
+    view: ViewMatrix,
+    grid: SurfaceGrid,
+) -> Vec<(f64, SurfaceShapes)> {
+    let receiver = &faces[receiver_index];
+    let normal = unit_3d([
+        receiver.normal[0] as f64,
+        receiver.normal[1] as f64,
+        receiver.normal[2] as f64,
+    ]);
+    let denominator = dot(normal, toward_light);
+    if denominator <= EPSILON {
+        return vec![(0.0, visible.clone())];
+    }
+    let Some(receiver_point) = receiver
+        .contours
+        .first()
+        .and_then(|contour| contour.first())
+    else {
+        return Vec::new();
+    };
+    let receiver_point = [
+        receiver_point[0] as f64,
+        receiver_point[1] as f64,
+        receiver_point[2] as f64,
+    ];
+    let visible_bounds = int_shapes_bounds(visible);
+    let mut lit = visible.clone();
+    let mut has_shadow = false;
+
+    for (occluder_index, occluder) in faces.iter().enumerate() {
+        if receiver_index == occluder_index {
+            continue;
+        }
+        let shadow = projected_shadow(
+            occluder,
+            receiver_point,
             normal,
-            point: face_center(face),
-            drop_axis,
-            contours,
+            denominator,
+            toward_light,
+            view,
+            grid,
+        );
+        if shadow.is_empty() || !int_bounds_overlap(visible_bounds, int_shapes_bounds(&shadow)) {
+            continue;
+        }
+        has_shadow = true;
+        let mut overlay = Overlay::with_shapes(&lit, &shadow);
+        lit = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+        if lit.is_empty() {
+            return vec![(0.0, visible.clone())];
         }
     }
 
-    fn intersects_ray(&self, origin: Point3F, direction: Point3F) -> bool {
-        let denominator = dot(self.normal, direction);
-        if denominator.abs() <= EPSILON {
-            return false;
-        }
-        let offset = [
-            self.point[0] - origin[0],
-            self.point[1] - origin[1],
-            self.point[2] - origin[2],
-        ];
-        let distance = dot(self.normal, offset) / denominator;
-        if distance <= 1e-6 {
-            return false;
-        }
-        let intersection = [
-            origin[0] + direction[0] * distance,
-            origin[1] + direction[1] * distance,
-            origin[2] + direction[2] * distance,
-        ];
-        point_in_compound(
-            project_for_axis(intersection, self.drop_axis),
-            &self.contours,
-        )
+    if !has_shadow {
+        return vec![(1.0, visible.clone())];
     }
+    let mut overlay = Overlay::with_shapes(visible, &lit);
+    let shadowed = overlay.overlay(OverlayRule::Difference, FillRule::EvenOdd);
+    let mut result = Vec::new();
+    if !lit.is_empty() {
+        result.push((1.0, lit));
+    }
+    if !shadowed.is_empty() {
+        result.push((0.0, shadowed));
+    }
+    result
 }
 
-fn project_for_axis(point: Point3F, drop_axis: usize) -> Point2 {
-    match drop_axis {
-        0 => [point[1], point[2]],
-        1 => [point[0], point[2]],
-        _ => [point[0], point[1]],
+fn projected_shadow(
+    occluder: &Face,
+    receiver_point: Point3F,
+    receiver_normal: Point3F,
+    denominator: f64,
+    toward_light: Point3F,
+    view: ViewMatrix,
+    grid: SurfaceGrid,
+) -> SurfaceShapes {
+    let contours = occluder
+        .contours
+        .iter()
+        .map(|contour| {
+            clip_contour_above_plane(contour, receiver_point, receiver_normal)
+                .into_iter()
+                .map(|point| {
+                    let distance = dot(receiver_normal, subtract_3d(point, receiver_point));
+                    let projected =
+                        subtract_3d(point, scale_3d(toward_light, distance / denominator));
+                    let [x, y, _] = transform_point_f64(projected, view);
+                    [x, y]
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    projected_to_int_shapes(&contours, grid)
+}
+
+fn clip_contour_above_plane(
+    contour: &[Point3],
+    plane_point: Point3F,
+    plane_normal: Point3F,
+) -> Vec<Point3F> {
+    if contour.is_empty() {
+        return Vec::new();
+    }
+    let point = |point: Point3| [point[0] as f64, point[1] as f64, point[2] as f64];
+    let distance = |point: Point3F| dot(plane_normal, subtract_3d(point, plane_point));
+    let mut result = Vec::new();
+    let mut previous = point(*contour.last().unwrap());
+    let mut previous_distance = distance(previous);
+    let mut previous_inside = previous_distance > EPSILON;
+    for &current in contour {
+        let current = point(current);
+        let current_distance = distance(current);
+        let current_inside = current_distance > EPSILON;
+        if current_inside != previous_inside {
+            let parameter = previous_distance / (previous_distance - current_distance);
+            result.push(lerp(previous, current, parameter));
+        }
+        if current_inside {
+            result.push(current);
+        }
+        previous = current;
+        previous_distance = current_distance;
+        previous_inside = current_inside;
+    }
+    result
+}
+
+fn int_shapes_bounds(shapes: &SurfaceShapes) -> Option<[i32; 4]> {
+    let mut points = shapes.iter().flatten().flatten();
+    let first = points.next()?;
+    let mut bounds = [first.x, first.y, first.x, first.y];
+    for point in points {
+        bounds[0] = bounds[0].min(point.x);
+        bounds[1] = bounds[1].min(point.y);
+        bounds[2] = bounds[2].max(point.x);
+        bounds[3] = bounds[3].max(point.y);
+    }
+    Some(bounds)
+}
+
+fn int_bounds_overlap(left: Option<[i32; 4]>, right: Option<[i32; 4]>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left[0] <= right[2] && left[2] >= right[0] && left[1] <= right[3] && left[3] >= right[1]
+        }
+        _ => false,
     }
 }
 
@@ -763,7 +822,10 @@ fn plane_distance(face: &ProjectedFace, point: Point3F) -> f64 {
 }
 
 fn transform_point(point: Point3, view: ViewMatrix) -> Point3F {
-    let point = [point[0] as f64, point[1] as f64, point[2] as f64];
+    transform_point_f64([point[0] as f64, point[1] as f64, point[2] as f64], view)
+}
+
+fn transform_point_f64(point: Point3F, view: ViewMatrix) -> Point3F {
     [
         dot(view[0], point),
         dot(view[1], point),
@@ -789,6 +851,23 @@ fn lerp_i64(start: Point3, end: Point3, parameter: f64) -> Point3F {
         start[1] as f64 + parameter * (end[1] - start[1]) as f64,
         start[2] as f64 + parameter * (end[2] - start[2]) as f64,
     ]
+}
+
+fn subtract_3d(left: Point3F, right: Point3F) -> Point3F {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn scale_3d(vector: Point3F, scale: f64) -> Point3F {
+    [vector[0] * scale, vector[1] * scale, vector[2] * scale]
+}
+
+fn unit_3d(vector: Point3F) -> Point3F {
+    let length = dot(vector, vector).sqrt();
+    if length <= EPSILON {
+        [0.0; 3]
+    } else {
+        scale_3d(vector, 1.0 / length)
+    }
 }
 
 fn same_point(left: Point3F, right: Point3F) -> bool {
@@ -980,21 +1059,38 @@ mod tests {
     }
 
     #[test]
-    fn computes_face_visibility_toward_the_light() {
-        let horizontal = |height, material| Face {
+    fn splits_a_receiver_into_lit_and_shadowed_regions() {
+        let horizontal = |height, material, x0, x1| Face {
             normal: [0, 0, 1],
             material,
             interior: false,
             contours: vec![vec![
-                [0, 0, height],
-                [10, 0, height],
-                [10, 10, height],
-                [0, 10, height],
+                [x0, 0, height],
+                [x1, 0, height],
+                [x1, 10, height],
+                [x0, 10, height],
             ]],
         };
-        let faces = vec![horizontal(0, 0), horizontal(10, 1)];
-
-        assert_eq!(light_visibility(&faces, [0.0, 0.0, 1.0]), vec![0.0, 1.0]);
+        let faces = vec![horizontal(0, 0, 0, 10), horizontal(10, 1, 0, 5)];
+        let view = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let projected: Vec<ProjectedFace> = faces
+            .iter()
+            .map(|face| ProjectedFace::new(face, view))
+            .collect();
+        let grid = SurfaceGrid::new(&projected);
+        let visible = projected_to_int_shapes(&projected[0].contours, grid);
+        let regions = split_by_light_visibility(0, &faces, &visible, [0.0, 0.0, 1.0], view, grid);
+        let lit = &regions
+            .iter()
+            .find(|(visibility, _)| *visibility == 1.0)
+            .unwrap()
+            .1;
+        let shadowed = &regions
+            .iter()
+            .find(|(visibility, _)| *visibility == 0.0)
+            .unwrap()
+            .1;
+        assert_eq!(shape_area2(lit), shape_area2(shadowed));
     }
 
     #[test]
