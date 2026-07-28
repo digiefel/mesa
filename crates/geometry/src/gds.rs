@@ -10,12 +10,24 @@ type GdsShapes = Vec<GdsShape>;
 
 const ROUND_CAP_SEGMENTS: usize = 12;
 
+fn default_scale() -> f64 {
+    1.0
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct GdsLayoutRequest {
     pub(crate) cell: String,
     pub(crate) layers: BTreeMap<String, [i16; 2]>,
     #[serde(default, rename = "path-tolerance")]
     pub(crate) path_tolerance: f64,
+    #[serde(default, rename = "unit-meters")]
+    pub(crate) unit_meters: Option<f64>,
+    #[serde(default = "default_scale")]
+    pub(crate) scale: f64,
+    #[serde(default = "default_scale", rename = "scale-x")]
+    pub(crate) scale_x: f64,
+    #[serde(default = "default_scale", rename = "scale-y")]
+    pub(crate) scale_y: f64,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -24,6 +36,8 @@ pub(crate) struct GdsLayout {
     pub(crate) origin: GdsPoint,
     pub(crate) size: GdsPoint,
     pub(crate) unit_meters: f64,
+    pub(crate) source_unit_meters: f64,
+    pub(crate) scale: GdsPoint,
     pub(crate) layers: BTreeMap<String, GdsShapes>,
 }
 
@@ -97,6 +111,17 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
             request.path_tolerance,
         ));
     }
+    for (name, value) in [
+        ("scale", request.scale),
+        ("scale-x", request.scale_x),
+        ("scale-y", request.scale_y),
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!(
+                "GDS {name} must be positive and finite; got {value}"
+            ));
+        }
+    }
 
     let mut layers = request
         .layers
@@ -104,8 +129,27 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         .map(|name| (name.clone(), GdsShapes::new()))
         .collect::<BTreeMap<_, _>>();
     let mut bounds: Option<[f64; 4]> = None;
-    let unit_meters = user_unit_meters(&library);
-    let user_units_per_database_unit = library.units.db_unit() / unit_meters;
+    let source_unit_meters = user_unit_meters(&library);
+    let unit_meters = request.unit_meters.unwrap_or(source_unit_meters);
+    if !unit_meters.is_finite() || unit_meters <= 0.0 {
+        return Err(format!(
+            "GDS output unit must be positive and finite; got {unit_meters}"
+        ));
+    }
+    let visual_scale = [
+        request.scale * request.scale_x,
+        request.scale * request.scale_y,
+    ];
+    let units_per_database_unit = [
+        library.units.db_unit() / unit_meters * visual_scale[0],
+        library.units.db_unit() / unit_meters * visual_scale[1],
+    ];
+    if units_per_database_unit
+        .iter()
+        .any(|value| !value.is_finite())
+    {
+        return Err("GDS unit conversion and scaling overflowed".to_string());
+    }
 
     for element in &cell.elems {
         let (layer, datatype) = match element {
@@ -150,16 +194,27 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
     let [min_x, min_y, max_x, max_y] = bounds
         .ok_or_else(|| "selected GDS layers contain no boundary or path geometry".to_string())?;
     let origin = [
-        min_x * user_units_per_database_unit,
-        min_y * user_units_per_database_unit,
+        min_x * units_per_database_unit[0],
+        min_y * units_per_database_unit[1],
     ];
+    let size = [
+        (max_x - min_x) * units_per_database_unit[0],
+        (max_y - min_y) * units_per_database_unit[1],
+    ];
+    if origin
+        .iter()
+        .chain(size.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err("GDS transformed bounds overflowed".to_string());
+    }
 
     for shapes in layers.values_mut() {
         for shape in shapes {
             for contour in shape {
                 for point in contour {
-                    point[0] = point[0] * user_units_per_database_unit - origin[0];
-                    point[1] = point[1] * user_units_per_database_unit - origin[1];
+                    point[0] = point[0] * units_per_database_unit[0] - origin[0];
+                    point[1] = point[1] * units_per_database_unit[1] - origin[1];
                 }
             }
         }
@@ -167,11 +222,10 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
 
     Ok(GdsLayout {
         origin,
-        size: [
-            (max_x - min_x) * user_units_per_database_unit,
-            (max_y - min_y) * user_units_per_database_unit,
-        ],
+        size,
         unit_meters,
+        source_unit_meters,
+        scale: visual_scale,
         layers,
     })
 }
@@ -539,11 +593,17 @@ mod tests {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("active".into(), [1, 0]), ("gate".into(), [10, 2])]),
                 path_tolerance: 0.0,
+                unit_meters: None,
+                scale: 1.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
             },
         )
         .unwrap();
 
         assert_eq!(layout.unit_meters, 1e-6);
+        assert_eq!(layout.source_unit_meters, 1e-6);
+        assert_eq!(layout.scale, [1.0, 1.0]);
         assert_eq!(layout.origin, [0.1, 0.2]);
         assert_eq!(layout.size, [0.01, 0.006]);
         for (actual, expected) in layout.layers["gate"][0][0].iter().zip([
@@ -554,6 +614,47 @@ mod tests {
         ]) {
             assert_point_close(*actual, expected);
         }
+    }
+
+    #[test]
+    fn converts_units_and_scales_planar_axes_after_import() {
+        let mut library = GdsLibrary::new("semi-example");
+        let mut top = GdsStruct::new("TOP");
+        top.elems.push(
+            boundary(
+                1,
+                0,
+                &[(100, 200), (110, 200), (110, 206), (100, 206), (100, 200)],
+            )
+            .into(),
+        );
+        library.structs.push(top);
+
+        let mut bytes = Vec::new();
+        library.write(&mut bytes).unwrap();
+        let layout = extract(
+            &bytes,
+            GdsLayoutRequest {
+                cell: "TOP".into(),
+                layers: BTreeMap::from([("active".into(), [1, 0])]),
+                path_tolerance: 0.0,
+                unit_meters: Some(1e-9),
+                scale: 0.5,
+                scale_x: 2.0,
+                scale_y: 3.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(layout.source_unit_meters, 1e-6);
+        assert_eq!(layout.unit_meters, 1e-9);
+        assert_eq!(layout.scale, [1.0, 1.5]);
+        assert_eq!(layout.origin, [100.0, 300.0]);
+        assert_eq!(layout.size, [10.0, 9.0]);
+        assert_eq!(
+            layout.layers["active"][0][0],
+            [[0.0, 0.0], [10.0, 0.0], [10.0, 9.0], [0.0, 9.0]]
+        );
     }
 
     #[test]
@@ -572,6 +673,10 @@ mod tests {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("wire".into(), [1, 0])]),
                 path_tolerance: 0.0,
+                unit_meters: None,
+                scale: 1.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
             },
         )
         .unwrap();
@@ -656,6 +761,10 @@ mod tests {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("wire".into(), [1, 0])]),
                 path_tolerance: 0.0,
+                unit_meters: None,
+                scale: 1.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
             },
         )
         .unwrap();
@@ -702,6 +811,10 @@ mod tests {
                 cell: "TOP".into(),
                 layers: BTreeMap::from([("active".into(), [1, 0])]),
                 path_tolerance: 0.0,
+                unit_meters: None,
+                scale: 1.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
             },
         )
         .unwrap_err();

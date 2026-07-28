@@ -15,6 +15,7 @@
     metal: (20, 0),
   ),
   path-tolerance: 1%,
+  unit: "nm",
 )
 
 #let draw-shapes(shapes, fill) = {

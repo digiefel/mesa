@@ -82,6 +82,19 @@ By default, `label` is projected onto the centre of the layer's front face.
 ### Masks and process steps
 
 ```typ
+gds(
+  data,
+  cell: none,
+  layers: none,
+  path-tolerance: 0,
+  unit: auto,
+  scale: 1,
+  scale-x: 1,
+  scale-y: 1,
+)
+```
+
+```typ
 #let layout = semi.gds(
   read("device.gds", encoding: none), // encoding: none is needed
   cell: "TOP", // cell name to read from the GDS file
@@ -90,6 +103,7 @@ By default, `label` is projected onto the centre of the layer's front face.
     metal: (20, 0),
   ),
   path-tolerance: 1%,
+  unit: "nm",
 )
 
 #let sample = {
@@ -106,15 +120,40 @@ By default, `label` is projected onto the centre of the layer's front face.
 ```
 
 `gds` reads boundaries and width-aware paths from the selected flat cell. Paths
-are converted to polygons before they enter the layer-stack renderer. The
-result contains `origin`, `size`, `unit-meters`, and the polygon arrays named
-in `layers`.
+are converted to polygons before they enter the layer-stack renderer.
 
-Coordinates are expressed in the user unit declared by the GDS library.
-`unit-meters` gives the physical size of one returned coordinate unit.
-`origin` is the lower-left coordinate of the selected geometry in those units;
-the returned polygons start at `(0, 0)`. Layer thicknesses, etch depths, and
-`layer-stack` size must use the same model unit as the mask geometry.
+`unit: auto` preserves the user unit declared by the GDS library. A unit string
+such as `"nm"`, `"um"`/`"µm"`, `"mm"`, `"cm"`, or `"m"` converts the
+coordinates to that base unit. A positive number instead specifies the unit
+size in metres directly. For example, a GDS width of 100 µm becomes `100000`
+with `unit: "nm"`, so a 20 nm film is naturally written as `thickness: 20`.
+Adding `scale-x: 0.01` compresses that width to `1000` model units for the
+drawing without changing the film thickness.
+
+`scale` multiplies both planar axes. `scale-x` and `scale-y` apply additional
+axis-specific factors:
+
+```text
+x factor = source unit / selected unit × scale × scale-x
+y factor = source unit / selected unit × scale × scale-y
+```
+
+The factors apply to every returned polygon, `origin`, and `size`. Paths are
+polygonized before anisotropic scaling, so their complete area geometry,
+including end caps, is transformed consistently. Layer thicknesses and etch
+depths use the selected base unit but are not affected by the planar scale.
+
+The result contains:
+
+- `origin` and `size` after unit conversion and planar scaling;
+- `source-unit-meters`, the GDS user unit;
+- `unit-meters`, the selected base unit before planar scaling;
+- `scale`, the final `(x, y)` visual factors;
+- the polygon arrays named in `layers`.
+
+The returned polygons start at `(0, 0)`. After anisotropic scaling there is no
+single physical unit for both displayed axes; the source and base-unit metadata
+remain available separately.
 
 `path-tolerance` optionally simplifies each path centreline before its width
 is applied. A ratio is relative to that path's width: `1%` permits a centreline

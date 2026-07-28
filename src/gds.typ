@@ -2,15 +2,30 @@
 
 /// Read boundary polygons and width-aware paths from a named GDS cell.
 ///
-/// Coordinates are returned in the user unit declared by the GDS library.
-/// The corresponding physical scale in metres is available as
-/// `layout.unit-meters`.
+/// `unit` selects the base unit of the returned coordinates. `auto` preserves
+/// the GDS user unit; unit strings such as `"nm"`, `"um"`, and `"mm"` convert
+/// the coordinates. A positive numeric value specifies the unit size in
+/// metres directly.
+///
+/// `scale` multiplies both planar axes. `scale-x` and `scale-y` apply
+/// additional axis-specific factors. Paths are polygonized before scaling.
+/// The result records `source-unit-meters`, `unit-meters`, and the final
+/// `(x, y)` factors in `scale`.
 ///
 /// `path-tolerance` optionally simplifies the path centreline by a fraction of
 /// that path's width before generating its two offset rails. For example, `2%`
 /// limits the centreline deviation to two percent of the path width. Zero
 /// preserves every path vertex.
-#let gds(data, cell: none, layers: none, path-tolerance: 0) = {
+#let gds(
+  data,
+  cell: none,
+  layers: none,
+  path-tolerance: 0,
+  unit: auto,
+  scale: 1,
+  scale-x: 1,
+  scale-y: 1,
+) = {
   assert(type(data) == bytes, message: "gds data must be bytes")
   assert(type(cell) == str, message: "gds cell must be a string")
   assert(type(layers) == dictionary, message: "gds layers must be a dictionary")
@@ -25,6 +40,45 @@
       and path-tolerance <= 1,
     message: "gds path-tolerance must be between 0% and 100%",
   )
+  let unit-meters = if unit == auto {
+    none
+  } else if type(unit) in (int, float) {
+    unit * 1.0
+  } else {
+    assert(
+      type(unit) == str,
+      message: "gds unit must be auto, a unit name, or metres per unit",
+    )
+    let normalized = if unit in ("µm", "μm") { "um" } else { unit }
+    let units = (
+      m: 1.0,
+      cm: 1e-2,
+      mm: 1e-3,
+      um: 1e-6,
+      nm: 1e-9,
+    )
+    assert(
+      normalized in units,
+      message: "unknown gds unit " + repr(unit),
+    )
+    units.at(normalized)
+  }
+  if unit-meters != none {
+    assert(
+      unit-meters > 0,
+      message: "gds unit must be positive",
+    )
+  }
+  for (name, value) in (
+    scale: scale,
+    scale-x: scale-x,
+    scale-y: scale-y,
+  ) {
+    assert(
+      type(value) in (int, float) and value > 0,
+      message: "gds " + name + " must be a positive number",
+    )
+  }
   for (name, layer) in layers {
     assert(
       type(layer) == array
@@ -33,5 +87,14 @@
       message: "gds layer " + name + " must be a (layer, datatype) pair",
     )
   }
-  _kernel.gds-layout(data, cell, layers, path-tolerance)
+  _kernel.gds-layout(
+    data,
+    cell,
+    layers,
+    path-tolerance,
+    unit-meters,
+    scale,
+    scale-x,
+    scale-y,
+  )
 }

@@ -1,6 +1,6 @@
 #let geometry-kernel = plugin("plugin/semi_geometry.wasm")
 
-#let protocol-version = 1
+#let protocol-version = 2
 #let grid-scale = 1000
 
 #let version() = str(geometry-kernel.kernel_version())
@@ -11,13 +11,26 @@
   info
 }
 
-#let gds-layout(data, cell, layers, path-tolerance) = {
+#let gds-layout(
+  data,
+  cell,
+  layers,
+  path-tolerance,
+  unit-meters,
+  scale,
+  scale-x,
+  scale-y,
+) = {
   let (version, result) = cbor(geometry-kernel.gds_layout(
     data,
     cbor.encode((
       cell: cell,
       layers: layers,
       path-tolerance: path-tolerance * 1.0,
+      unit-meters: unit-meters,
+      scale: scale * 1.0,
+      scale-x: scale-x * 1.0,
+      scale-y: scale-y * 1.0,
     )),
   ))
   assert.eq(version, protocol-version)
@@ -26,6 +39,8 @@
     origin: result.origin,
     size: result.size,
     unit-meters: result.unit-meters,
+    source-unit-meters: result.source-unit-meters,
+    scale: result.scale,
   )
   for (name, shapes) in result.layers {
     layout.insert(name, shapes)
