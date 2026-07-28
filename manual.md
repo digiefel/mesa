@@ -91,6 +91,7 @@ gds(
   scale: 1,
   scale-x: 1,
   scale-y: 1,
+  padding: 0,
 )
 ```
 
@@ -104,6 +105,7 @@ gds(
   ),
   path-tolerance: 1%,
   unit: "nm",
+  padding: (x: 100, y: 60),
 )
 
 #let sample = {
@@ -138,22 +140,34 @@ x factor = source unit / selected unit × scale × scale-x
 y factor = source unit / selected unit × scale × scale-y
 ```
 
-The factors apply to every returned polygon, `origin`, and `size`. Paths are
-polygonized before anisotropic scaling, so their complete area geometry,
-including end caps, is transformed consistently. Layer thicknesses and etch
-depths use the selected base unit but are not affected by the planar scale.
+The factors apply to every returned polygon, `origin`, and `content-size`.
+Paths are polygonized before anisotropic scaling, so their complete area
+geometry, including end caps, is transformed consistently. Layer thicknesses
+and etch depths use the selected base unit but are not affected by the planar
+scale.
+
+`padding` adds empty space in those final model coordinates after conversion
+and planar scaling. A number applies to every side, `(x: 100, y: 60)` applies
+symmetrically per axis, and `(left: 50, right: 100, front: 30, back: 60)`
+controls the four sides independently. All imported polygons are offset by
+`(left, front)`, and `size` grows to include the padding, so a substrate created
+with `size: layout.size` automatically fills the expanded frame.
 
 The result contains:
 
-- `origin` and `size` after unit conversion and planar scaling;
+- `origin`, the transformed origin of the GDS content itself;
+- `content-size`, the transformed GDS content size before padding;
+- `offset`, the `(left, front)` translation applied to every polygon;
+- `padding`, normalized to `left`, `right`, `front`, and `back`;
+- `size`, the complete padded layout size;
 - `source-unit-meters`, the GDS user unit;
 - `unit-meters`, the selected base unit before planar scaling;
 - `scale`, the final `(x, y)` visual factors;
 - the polygon arrays named in `layers`.
 
-The returned polygons start at `(0, 0)`. After anisotropic scaling there is no
-single physical unit for both displayed axes; the source and base-unit metadata
-remain available separately.
+Without padding, the returned polygons start at `(0, 0)`. After anisotropic
+scaling there is no single physical unit for both displayed axes; the source
+and base-unit metadata remain available separately.
 
 `path-tolerance` optionally simplifies each path centreline before its width
 is applied. A ratio is relative to that path's width: `1%` permits a centreline

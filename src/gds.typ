@@ -12,6 +12,10 @@
 /// The result records `source-unit-meters`, `unit-meters`, and the final
 /// `(x, y)` factors in `scale`.
 ///
+/// `padding` adds empty model space around the transformed GDS geometry. A
+/// number applies to every side; `(x: ..., y: ...)` applies per axis; and
+/// `(left: ..., right: ..., front: ..., back: ...)` controls each side.
+///
 /// `path-tolerance` optionally simplifies the path centreline by a fraction of
 /// that path's width before generating its two offset rails. For example, `2%`
 /// limits the centreline deviation to two percent of the path width. Zero
@@ -25,6 +29,7 @@
   scale: 1,
   scale-x: 1,
   scale-y: 1,
+  padding: 0,
 ) = {
   assert(type(data) == bytes, message: "gds data must be bytes")
   assert(type(cell) == str, message: "gds cell must be a string")
@@ -79,6 +84,46 @@
       message: "gds " + name + " must be a positive number",
     )
   }
+  let padding = if type(padding) in (int, float) {
+    (
+      left: padding,
+      right: padding,
+      front: padding,
+      back: padding,
+    )
+  } else {
+    assert(
+      type(padding) == dictionary,
+      message: "gds padding must be a number or dictionary",
+    )
+    let allowed = ("x", "y", "left", "right", "front", "back")
+    for key in padding.keys() {
+      assert(
+        key in allowed,
+        message: "unknown gds padding side " + repr(key),
+      )
+    }
+    let x = padding.at("x", default: 0)
+    let y = padding.at("y", default: 0)
+    (
+      left: padding.at("left", default: x),
+      right: padding.at("right", default: x),
+      front: padding.at("front", default: y),
+      back: padding.at("back", default: y),
+    )
+  }
+  for (name, value) in padding {
+    assert(
+      type(value) in (int, float) and value >= 0,
+      message: "gds padding " + name + " must be a non-negative number",
+    )
+  }
+  padding = (
+    left: padding.left * 1.0,
+    right: padding.right * 1.0,
+    front: padding.front * 1.0,
+    back: padding.back * 1.0,
+  )
   for (name, layer) in layers {
     assert(
       type(layer) == array
@@ -96,5 +141,6 @@
     scale,
     scale-x,
     scale-y,
+    padding,
   )
 }

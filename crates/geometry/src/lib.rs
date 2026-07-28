@@ -16,7 +16,7 @@ use wasm_minimal_protocol::wasm_func;
 #[cfg(target_arch = "wasm32")]
 wasm_minimal_protocol::initiate_protocol!();
 
-const PROTOCOL_VERSION: u8 = 2;
+const PROTOCOL_VERSION: u8 = 3;
 
 type WirePoint = [i64; 2];
 type WireContour = Vec<WirePoint>;

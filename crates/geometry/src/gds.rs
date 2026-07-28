@@ -14,6 +14,14 @@ fn default_scale() -> f64 {
     1.0
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub(crate) struct GdsPadding {
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) front: f64,
+    pub(crate) back: f64,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct GdsLayoutRequest {
     pub(crate) cell: String,
@@ -28,6 +36,8 @@ pub(crate) struct GdsLayoutRequest {
     pub(crate) scale_x: f64,
     #[serde(default = "default_scale", rename = "scale-y")]
     pub(crate) scale_y: f64,
+    #[serde(default)]
+    pub(crate) padding: GdsPadding,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -35,6 +45,9 @@ pub(crate) struct GdsLayoutRequest {
 pub(crate) struct GdsLayout {
     pub(crate) origin: GdsPoint,
     pub(crate) size: GdsPoint,
+    pub(crate) content_size: GdsPoint,
+    pub(crate) offset: GdsPoint,
+    pub(crate) padding: GdsPadding,
     pub(crate) unit_meters: f64,
     pub(crate) source_unit_meters: f64,
     pub(crate) scale: GdsPoint,
@@ -122,6 +135,18 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
             ));
         }
     }
+    for (name, value) in [
+        ("left", request.padding.left),
+        ("right", request.padding.right),
+        ("front", request.padding.front),
+        ("back", request.padding.back),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(format!(
+                "GDS padding {name} must be non-negative and finite; got {value}"
+            ));
+        }
+    }
 
     let mut layers = request
         .layers
@@ -197,12 +222,18 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         min_x * units_per_database_unit[0],
         min_y * units_per_database_unit[1],
     ];
-    let size = [
+    let content_size = [
         (max_x - min_x) * units_per_database_unit[0],
         (max_y - min_y) * units_per_database_unit[1],
     ];
+    let offset = [request.padding.left, request.padding.front];
+    let size = [
+        content_size[0] + request.padding.left + request.padding.right,
+        content_size[1] + request.padding.front + request.padding.back,
+    ];
     if origin
         .iter()
+        .chain(content_size.iter())
         .chain(size.iter())
         .any(|value| !value.is_finite())
     {
@@ -213,8 +244,8 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
         for shape in shapes {
             for contour in shape {
                 for point in contour {
-                    point[0] = point[0] * units_per_database_unit[0] - origin[0];
-                    point[1] = point[1] * units_per_database_unit[1] - origin[1];
+                    point[0] = point[0] * units_per_database_unit[0] - origin[0] + offset[0];
+                    point[1] = point[1] * units_per_database_unit[1] - origin[1] + offset[1];
                 }
             }
         }
@@ -223,6 +254,9 @@ pub(crate) fn extract(bytes: &[u8], request: GdsLayoutRequest) -> Result<GdsLayo
     Ok(GdsLayout {
         origin,
         size,
+        content_size,
+        offset,
+        padding: request.padding,
         unit_meters,
         source_unit_meters,
         scale: visual_scale,
@@ -597,6 +631,7 @@ mod tests {
                 scale: 1.0,
                 scale_x: 1.0,
                 scale_y: 1.0,
+                padding: GdsPadding::default(),
             },
         )
         .unwrap();
@@ -617,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_units_and_scales_planar_axes_after_import() {
+    fn converts_units_scales_and_pads_planar_geometry() {
         let mut library = GdsLibrary::new("semi-example");
         let mut top = GdsStruct::new("TOP");
         top.elems.push(
@@ -642,6 +677,12 @@ mod tests {
                 scale: 0.5,
                 scale_x: 2.0,
                 scale_y: 3.0,
+                padding: GdsPadding {
+                    left: 1.0,
+                    right: 2.0,
+                    front: 3.0,
+                    back: 4.0,
+                },
             },
         )
         .unwrap();
@@ -650,10 +691,21 @@ mod tests {
         assert_eq!(layout.unit_meters, 1e-9);
         assert_eq!(layout.scale, [1.0, 1.5]);
         assert_eq!(layout.origin, [100.0, 300.0]);
-        assert_eq!(layout.size, [10.0, 9.0]);
+        assert_eq!(layout.content_size, [10.0, 9.0]);
+        assert_eq!(layout.offset, [1.0, 3.0]);
+        assert_eq!(
+            layout.padding,
+            GdsPadding {
+                left: 1.0,
+                right: 2.0,
+                front: 3.0,
+                back: 4.0,
+            }
+        );
+        assert_eq!(layout.size, [13.0, 16.0]);
         assert_eq!(
             layout.layers["active"][0][0],
-            [[0.0, 0.0], [10.0, 0.0], [10.0, 9.0], [0.0, 9.0]]
+            [[1.0, 3.0], [11.0, 3.0], [11.0, 12.0], [1.0, 12.0]]
         );
     }
 
@@ -677,6 +729,7 @@ mod tests {
                 scale: 1.0,
                 scale_x: 1.0,
                 scale_y: 1.0,
+                padding: GdsPadding::default(),
             },
         )
         .unwrap();
@@ -765,6 +818,7 @@ mod tests {
                 scale: 1.0,
                 scale_x: 1.0,
                 scale_y: 1.0,
+                padding: GdsPadding::default(),
             },
         )
         .unwrap();
@@ -815,6 +869,7 @@ mod tests {
                 scale: 1.0,
                 scale_x: 1.0,
                 scale_y: 1.0,
+                padding: GdsPadding::default(),
             },
         )
         .unwrap_err();
