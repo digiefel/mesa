@@ -1,4 +1,4 @@
-#import "../src/lib.typ" as semi
+#import "@preview/mesa:0.1.0" as semi
 #import "@preview/cetz:0.5.2": canvas, draw
 
 #set page(width: auto, height: auto, margin: 12mm)

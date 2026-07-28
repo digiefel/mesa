@@ -1,4 +1,4 @@
-#import "../src/lib.typ" as semi
+#import "@preview/mesa:0.1.0" as semi
 
 #set page(width: auto, height: auto, margin: 8mm)
 
