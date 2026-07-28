@@ -1,19 +1,7 @@
-# Layer-stack API
+# Mesa API
 
-How to describe a layer stack and render it in 2D or 3D.
-
-## Scope
-
-Supports:
-
-- rectangular and polygon-masked material layers;
-- GDS cells mapped to named masks;
-- directional deposition and etching;
-- 2D cross-sections, cut views, and 3D oblique rendering from the same scene;
-- package defaults with per-layer style overrides;
-- different styles of shading and lighting effects.
-
-## API
+A sample is built from bottom to top inside `layer-stack`. Layer thicknesses
+and coordinates represent nanometres by default.
 
 ```typ
 #import "@preview/mesa:0.1.0" as semi
@@ -23,57 +11,39 @@ Supports:
 
   layer(
     "substrate",
-    thickness: 1.2,
+    thickness: 30,
     material: "substrate",
-    label: [substrate],
+    label: [Si],
   )
   layer(
-    "dielectric",
-    thickness: 0.18,
+    "oxide",
+    thickness: 5,
     material: "dielectric",
-    label: [dielectric],
+    label: [SiO#sub[2]],
   )
   layer(
-    "metal",
-    thickness: 0.25,
+    "gate",
+    thickness: 15,
     material: "metal",
-    label: [metal],
+    label: [Al],
   )
-  layer(
-    "resist",
-    thickness: 0.7,
-    material: "resist",
-    label: [resist],
-  )
-
-  // any kind of CeTZ annotation here
 }
 
 #semi.layer-stack(sample)
 
 #semi.layer-stack(
   sample,
-  camera: (
-    azimuth: 35deg,
-    elevation: 25deg,
-  ),
-  shading: "flat",
-  light: (
-    azimuth: -45deg,
-    elevation: 60deg,
-    intensity: 0.25,
-  ),
+  camera: (azimuth: 35deg, elevation: 25deg),
+  shading: "fancy",
 )
 ```
 
 `layer-stack` wraps a CeTZ canvas. The functions in its body add layers to the
-drawing in order. Camera, shading, and lighting can be customized with the
-respective `layer-stack` arguments. Other CeTZ components and primitives can be
-used in the body to annotate the drawing. 
+drawing in order. Other CeTZ components and primitives can be used in the body
+to annotate the drawing. The same sample can be rendered from different
+camera angles or as a cross-section simply by adjusting the related arguments.
 
-## Model
-
-### `layer`
+## Layers
 
 ```typ
 layer(
@@ -95,38 +65,26 @@ layer(
 ```
 
 - `name` identifies the layer and its anchors.
-- `thickness` is required and expressed in model units.
-- `material` selects a style from the active material palette.
-- `variant` selects a 1-based style variant. By default, variants advance and
-  cycle independently for each material.
-- `label` is Typst content associated with the layer.
-- the `label-*` arguments are forwarded to the `draw.content` of the label.
-  `label-position` or explicit `label-project` are relative to the layer, so
-  `"front"` becomes `"layer-name.front"`.
-- `bevel` overrides the stack's bevel configuration for this layer (see later sections).
-- `internal-stroke` overrides the bevel-contour stroke.
-- `mask` limits the layer to polygon geometry. 
-- extra named arguments override the selected material style.
+- `thickness` is required.
+- `material` selects a style family.
+- `variant` selects a 1-based style variant.
+- `label` accepts Typst content.
+- `label-*` forwards to `draw.content`. Short positions and projection faces
+  are relative to the layer: `"front"` resolves to `"layer-name.front"`.
+- `bevel` and `internal-stroke` override the stack defaults.
+- `mask` accepts polygon geometry.
+- `..style` overrides material properties for this layer.
 
-```typ
-layer("metal-1", thickness: 0.3, material: "metal")
-layer("metal-2", thickness: 0.3, material: "metal")
-layer("metal-3", thickness: 0.3, material: "metal", variant: 1)
-```
+By default, `label` is projected onto the centre of the layer's front face.
 
-The first two layers use successive metal variants. The third explicitly uses
-variant 1. It still advances the metal occurrence counter.
-
-### Patterned geometry
-
-`gds` loads selected boundaries from a named GDS cell:
+### Masks and process steps
 
 ```typ
 #let layout = semi.gds(
-  read("device.gds", encoding: none),
-  cell: "TOP",
+  read("device.gds", encoding: none), // encoding: none is needed
+  cell: "TOP", // cell name to read from the GDS file
   layers: (
-    gate: (10, 0),
+    gate: (10, 0), // layer spec, i.e. 10/0
     metal: (20, 0),
   ),
 )
@@ -137,18 +95,91 @@ variant 1. It still advances the metal occurrence counter.
   layer("substrate", thickness: 40, material: "substrate")
   layer("oxide", thickness: 5, material: "dielectric")
   layer("gate", thickness: 15, material: "metal", mask: layout.gate)
-  etch(depth: 5, mask: layout.metal)
+  etch(depth: 5, mask: layout.metal) // this modifies the previous layer
   layer("contacts", thickness: 10, material: "metal", mask: layout.metal)
 }
 
 #semi.layer-stack(sample, size: layout.size)
 ```
 
-`etch` removes material vertically through its mask. An omitted mask applies
-the operation to the complete scene.
-`mask.invert(...)` selects its complement within the scene bounds.
+`gds` reads the selected boundaries, converts their coordinates to nanometres,
+and returns `origin`, `size`, and the polygon arrays named in `layers`.
+`origin` is the lower-left coordinate of those boundaries in the GDS file;
+the returned polygons start at `(0, 0)`. `semi.debug.gds(data)` lists the
+library units, cells, and layers.
 
-### Layer anchors and projected content
+`layer(..., mask:)` deposits over the selected polygons.
+`etch(depth:, mask:)` is used alongside `layer` in a sample body. When it is
+reached, it removes `depth` nanometres from the current surface wherever the
+mask is present. Later commands build on the etched sample. In the example,
+5 nm is removed through `layout.metal` before the contacts are deposited.
+
+`mask: auto` covers the complete sample. `semi.mask.invert(geometry)` selects
+the geometric complement within the sample bounds. Its short form after
+`import semi: *` is `mask.invert(geometry)`.
+
+### Materials
+
+Material styles set the fill, outline, pattern, and fade of a layer.
+`semi.default-palette` contains `default`, `substrate`, `dielectric`, `metal`,
+and `resist` families. `material: auto` uses `default`. Repeated layers cycle
+through the variants in their material family.
+
+`fill` accepts a color or a `hatch`, `crosshatch`, or `dots` tiling:
+
+```typ
+layer(
+  "metal",
+  thickness: 10,
+  material: "metal",
+  base-color: rgb("#d8c27a"),
+  fill: hatch(
+    background: rgb("#d8c27a"),
+    color: rgb("#8e762c"),
+  ),
+)
+```
+
+`base-color` fills bevel faces and is inferred from a solid `fill`. Patterned
+fills can supply it explicitly. `fade-bottom` fades a material between two
+depths measured from its top:
+
+```typ
+fade-bottom: (start: 70%, end: 95%, color: white)
+```
+
+The default substrate style uses this fade.
+
+`palette` customizes material defaults for a stack. A family may contain one
+style or an array of variants:
+
+```typ
+#semi.layer-stack(
+  sample,
+  palette: (
+    metal: (
+      (fill: rgb("#d9b44a")),
+      (fill: rgb("#d7a17c")),
+    ),
+  ),
+)
+```
+
+### Anchors and content
+
+Every layer defines CeTZ anchors for its faces, edges, and corners:
+
+```typ
+"metal.front"
+"metal.top"
+"metal.back-right"
+"metal.back-right-bottom"
+```
+
+These anchors work wherever CeTZ accepts a coordinate.
+
+Mesa's `draw` module re-exports CeTZ drawing functions. Its `content` function
+adds face projection:
 
 ```typ
 draw.content(
@@ -161,32 +192,15 @@ draw.content(
 )
 ```
 
-The package exports `draw`, a facade over CeTZ's `draw` module. Its functions
-are unchanged except where this package explicitly adds semiconductor-aware
-behavior.
-
-Every named layer exposes CeTZ anchors for its faces, edges, and corners:
+`project: auto` uses the face named by a central face coordinate:
 
 ```typ
-"metal.front"
-"metal.top"
-"metal.back-right"
-"metal.back-right-bottom"
+draw.content("resist.front", [Photoresist])
 ```
 
-These are ordinary CeTZ coordinates. They work anywhere a CeTZ coordinate is
-accepted.
-
-The package's `draw.content` adds one named argument, `project`. With its
-default, `auto`, a placement at one of the six central layer-face anchors also
-selects that face's projection plane:
+Placement and projection may refer to separate nodes:
 
 ```typ
-draw.content(
-  "resist.front",
-  [Photoresist],
-)
-
 draw.content(
   "metal-t.mid",
   text(7pt)[15 nm],
@@ -195,74 +209,10 @@ draw.content(
 )
 ```
 
-In the second call, `"metal-t.mid"` is only the midpoint of a named CeTZ line.
-It therefore does not imply a projection plane. `"metal.back"` supplies one
-explicitly. `project: none` disables projection.
+`project: none` keeps the content in page coordinates. The central `front`,
+`back`, `left`, and `right` anchors use the visible centre of a fading layer.
 
-Layer labels are shorthand for the same call:
-
-```typ
-layer(
-  "resist",
-  thickness: 20,
-  label: [Photoresist],
-  label-position: "front",
-  label-project: auto,
-)
-```
-
-This is equivalent to `draw.content("resist.front", [Photoresist])`.
-`label-angle`, `label-anchor`, and `label-name` forward the corresponding
-`draw.content` arguments. The four central side anchors use the visible
-vertical middle of a fading layer; all other anchors remain geometric.
-
-Material fills can be colors or the package's `hatch`, `crosshatch`, and `dots`
-tilings:
-
-```typ
-layer(
-  "metal",
-  thickness: 0.4,
-  base-color: rgb("#d8c27a"),
-  fill: hatch(
-    background: rgb("#d8c27a"),
-    color: rgb("#8e762c"),
-  ),
-)
-```
-
-`base-color` is the solid material colour used on bevel faces. This prevents a
-tiling from restarting independently on every chamfer. The default material
-styles provide it. A custom patterned `fill` should normally provide a matching
-`base-color`; a solid-colour `fill` is used automatically.
-
-`fade-bottom` fades a material between two depths measured from its top:
-
-```typ
-fade-bottom: (start: 70%, end: 95%, color: white)
-```
-
-A palette entry is either one style or an array of variants:
-
-```typ
-#semi.layer-stack(
-  sample,
-  palette: (
-    metal: (
-      (fill: rgb("#d9b44a")),
-      (fill: hatch(
-        background: rgb("#d7a17c"),
-        color: rgb("#985f3d"),
-      )),
-    ),
-  ),
-)
-```
-
-Automatic selection starts with the first variant, advances for every layer in
-that material family, and wraps at the end of the array.
-
-### `layer-stack`
+## Rendering
 
 ```typ
 layer-stack(
@@ -293,65 +243,86 @@ layer-stack(
 )
 ```
 
-Model coordinates represent nanometres by default. `size` is `(x-width,
-y-depth)` in the same units as layer thickness; its default is `(80, 50)`.
+`size` is `(x-width, y-depth)`. `length` sets the rendered length of one
+nanometre and defaults to `.8mm`.
 
-The default camera is the front cross-section. `azimuth` rotates around the
-vertical axis; `elevation` moves above the substrate plane. Changing either
-angle reveals the depth of the same stack.
+### Coordinates and camera
 
-`light` uses the same angular convention as `camera`, but its direction is
-independent of the camera. The angles define the direction in which the light
-travels. "Flat" and "fancy" shading use the same directional Lambertian
-calculation and directional self-shadowing for every face:
+Mesa uses a right-handed device coordinate system:
 
-Azimuth `0deg` travels along `+y`, from the visible front into the sample.
-Positive azimuth rotates toward `+x`. Elevation `0deg` lies in the `x-y`
-plane, and positive elevation travels toward `-z`, from above toward the
-sample.
+- `x`: width;
+- `y`: depth;
+- `z`: height.
+
+The substrate lies in the `x-y` plane. The default camera shows the front
+`x-z` cross-section. Camera azimuth rotates around `z`; elevation moves above
+the substrate. Positive azimuth reveals the right face, and positive elevation
+reveals the top.
+
+Face names remain fixed in model space:
+
+- `"front"`: `y = 0`;
+- `"back"`: `y = depth`;
+- `"left"`: `x = 0`;
+- `"right"`: `x = width`.
+
+### Light and shading
+
+Light angles describe the direction in which light travels. Azimuth `0deg`
+travels along `+y`; positive azimuth rotates toward `+x`. Elevation `0deg`
+lies in the `x-y` plane; positive elevation travels toward `-z`.
+
+Camera and light directions are independent. A directional light produces
+parallel rays and geometric self-shadowing:
 
 ```text
 cosine = max(0, dot(face-normal, -light-direction))
-visibility = 0 if the face points away from the light or sample geometry blocks it, otherwise 1
 brightness = (1 - intensity) + intensity * visibility * cosine
 ```
 
-`intensity` accepts a number from `0` to `1` or an equivalent ratio. At `0`,
-all face orientations retain the material colour; at `1`, unshadowed points
-use the unmodified cosine term and shadowed points receive no direct light.
-Changing the camera does not change the light direction, unshadowed
-brightness, or model-space shadow geometry.
+`visibility` is `0` for shadowed or back-facing surfaces and `1` for directly
+lit surfaces. `intensity` accepts a number from `0` to `1` or an equivalent
+ratio.
 
-The light is infinitely far away, so all rays are parallel. Self-shadows are
-computed before rendering from the generated polygon faces, including faces
-from the same layer. Each face is rendered once at its computed brightness; no
-shadow overlay is drawn.
+`shading: "none"` uses the material colors directly. `"flat"` applies lighting
+and self-shadowing. `"fancy"` also adds bevel faces while preserving material
+fills and tilings.
 
-`shading` accepts `"none"`, `"flat"`, and `"fancy"`. fancy keeps the
-material's `fill`, including hatches and dots, but adds one-segment chamfer
-faces at exposed layer tops and bottoms. `palette` changes material defaults;
-per-layer style arguments still take precedence.
-
-`bevel` controls the chamfer geometry used by fancy shading. A number applies
-the same model-space depth at the top and bottom. A ratio is relative to the
-layer thickness. A dictionary configures them independently:
+`bevel` accepts one number, one ratio, or separate top and bottom values:
 
 ```typ
+bevel: 0.5
+bevel: 8%
 bevel: (top: 0.5, bottom: 0.25)
-bevel: (top: 8%, bottom: 4%)
 ```
 
-The layer-level `bevel` argument overrides this configuration. A fading
-substrate has no visible bottom edge, so its bottom bevel is suppressed.
+Ratios are relative to the layer thickness.
 
-`stroke` in a material or layer style controls the exterior outline.
-`internal-stroke` independently controls the contours between bevel faces and
-flat faces. It defaults to `none`; `auto` reuses the exterior stroke, and any
-CeTZ stroke value can give these contours a lighter or dashed style. A
-layer-level `internal-stroke` overrides the stack setting.
+`stroke` styles exterior outlines. `internal-stroke` styles internal contours,
+including bevel contours. `auto` reuses the exterior stroke.
 
-`debug` accepts a CeTZ-style body evaluated after the final stack geometry and
-lighting values are known:
+### Cross-sections and cuts
+
+`section` renders a cross-section of the sample through the specified plane:
+
+```typ
+section: ((0, 25), (80, 25))
+```
+
+`cut` splits the three-dimensional sample across the plane and renders the selected side:
+
+```typ
+cut: ((0, 25), (80, 25))
+cut: (plane: ((0, 25), (80, 25)), keep: "right")
+```
+
+The line form keeps its left side. The dictionary form accepts `"left"` or
+`"right"`.
+
+All planes are defined as (point, direction) and are "vertical" planes,
+i.e. they can only run along the `z` axis.
+
+### Debugging
 
 ```typ
 #semi.layer-stack(
@@ -371,46 +342,17 @@ lighting values are known:
 )
 ```
 
-`light()` draws one ray toward the sample by default, with an open chevron at
-its midpoint, and reports azimuth, elevation, and intensity. It also shows the
-zero-azimuth reference, the horizontal and vertical projections of the light
-direction, and separate azimuth and elevation arcs. Set `angles: false` to
-hide that construction or `rays` to draw additional parallel rays.
-`axes()` and `light()` share an origin on a model-space sphere centred on the
-sample's top face. Its radius is 75% of the sample's three-dimensional
-diagonal. The origin depends on the light direction, not the camera, so camera
-movement only changes its projection. The light ray points from that origin
-toward the sphere centre.
-`face-info()` attaches a projected box directly to each selected side face
-using the exact normal, cosine, visibility, and brightness values already
-computed by the renderer; `normals()` draws the corresponding geometric
-normals. By default, `face-info()` selects the visible side faces from the
-camera angle. The optional `faces` and `layers` arguments can focus either
-helper on specific geometry.
+- `axes()` draws the device coordinate axes.
+- `light()` draws the light direction, angular construction, and intensity.
+- `face-info()` projects renderer diagnostics onto selected faces.
+- `normals()` draws geometric surface normals.
 
-Face names are fixed in model space: `"front"` is `y = 0`, `"back"` is
-`y = depth`, `"left"` is `x = 0`, and `"right"` is `x = width`. Camera
-rotation never changes those meanings. `faces: auto` only chooses among those
-objective names according to which side faces are visible.
+`faces: auto` selects camera-visible side faces. `layers` filters by layer name.
+`semi.debug.topology(body, ..layer-stack-arguments)` displays outline,
+material, internal, and occluded edge classifications.
 
-`length`, `baseline`, `background`, `stroke`, and `padding` are passed to
-`cetz.canvas`. `canvas-debug` separately controls CeTZ's bounding-box debugger.
-`length` specifies the rendered length of one model unit and defaults to
-`.8mm`. The default front view is 64 mm wide; an oblique view is approximately
-half-column width on an A4 page.
+### Canvas
 
-The canvas `x`, `y`, and `z` arguments are not exposed. `layer-stack` controls
-the coordinate basis to implement device coordinates and the camera.
-
-### Coordinates
-
-The package uses device coordinates:
-
-- `x`: width;
-- `y`: depth;
-- `z`: height.
-
-The coordinate system is right-handed: `x × y = z`.
-
-The substrate lies in the `x-y` plane. The `z` direction is normal to the
-substrate plane, i.e. "up". The default camera shows the `x-z` cross-section.
+`length`, `baseline`, `background`, `stroke`, and `padding` pass through to
+`cetz.canvas`. `canvas-debug` controls CeTZ's bounding-box debugger.
+Please refer to the CeTZ documentation for more details.
